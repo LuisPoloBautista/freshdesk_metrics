@@ -1109,7 +1109,7 @@ with T[5]:
 
     for ntype, label, color in [
         ('ticket', '🎫 Ticket', '#4f8ef7'),
-        ('agent',  '👤 Agente', '#40c057'),
+        ('agent',  '👤 Agentes y clientes', '#40c057'),
         ('system', '⚙️ Sistema','#64748b'),
         ('action', '🏷️ Acción', '#f59f00'),
     ]:
