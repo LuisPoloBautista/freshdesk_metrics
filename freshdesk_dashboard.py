@@ -982,7 +982,7 @@ with T[4]:
             'Brecha Larga': (probs['max_gap_h'] > gap_th_h).sum(),
             'Reabiertos': probs['reopened'].sum(),
             'Sin Resolver': (~probs['is_resolved']).sum(),
-            'Múltiples Agentes': (probs['n_agents'] > 2).sum(),
+            'Múltiples Agentes y clientes': (probs['n_agents'] > 2).sum(),
         }
         fig = px.bar(x=list(cats.keys()), y=list(cats.values()),
                      title='Categorías de Problemas',
