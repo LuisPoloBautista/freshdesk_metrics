@@ -1,5 +1,15 @@
 # Automatizacion de descarga de datos Freshdesk
 
+## Windows
+
+Ejecuta `Set-ExecutionPolicy -Scope Process Bypass` y luego
+`.\setup_windows.ps1`. Copia `.env.example` como `.env` y coloca la API key
+real. Para probar sin publicar usa `.\update_freshdesk.ps1 -NoPull -NoPush`.
+Con GitHub ya configurado, `.\update_freshdesk.ps1` descarga el dia anterior,
+hace commit y push. `.\register_scheduled_task.ps1` registra el proceso diario
+a las 07:00; acepta otra hora con `-At "08:30"`. El log queda en
+`logs/fetch_daily.log`.
+
 Este documento explica como quedo automatizada la descarga diaria de actividades
 de tickets de Freshdesk y como ejecutarla manualmente o de forma periodica.
 

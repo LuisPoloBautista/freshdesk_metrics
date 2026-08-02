@@ -1,5 +1,17 @@
 # 📡 Freshdesk Intelligence Dashboard
 
+## Inicio rapido en Windows
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\setup_windows.ps1
+.\.venv\Scripts\python.exe -m streamlit run freshdesk_dashboard.py
+```
+
+La descarga, commit y publicacion diaria se ejecutan con
+`.\update_freshdesk.ps1`. Para registrarla diariamente a las 07:00 en el
+Programador de tareas, ejecuta `.\register_scheduled_task.ps1`.
+
 Dashboard de análisis completo para actividades exportadas de Freshdesk.
 
 ## Instalación
