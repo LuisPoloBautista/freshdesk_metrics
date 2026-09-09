@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import networkx as nx
 from collections import defaultdict
 from ticket_filters import normalize_id, attach_ticket_owners, filter_owners, survey_ticket_numbers, filter_participants
-from ticket_filters import filter_traceable_tickets
+from ticket_filters import include_exported_tickets, apply_ticket_snapshot
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -340,7 +340,7 @@ def load_df(directory: str, file_hash: str, agent_names_tuple: tuple) -> pd.Data
             pname = agent_names.get(pid, f"Agente …{pid[-4:]}")
 
         priority = normalize_priority(act.get('Prioridad') or act.get('priority'))
-        producto = act.get('Producto', None)
+        producto = act.get('Producto', act.get('cf_producto_3748365'))
         ticket_type = act.get('ticket_type', None)
         
         rows.append({
@@ -461,7 +461,7 @@ def compute_sla(df: pd.DataFrame, sla_resp_h: int, sla_res_h: int) -> pd.DataFra
             'all_resp_sla':  sla_cfg['all_resp'],
             'resolution_h':  round(ttr, 2)  if ttr  is not None else None,
             'res_sla':       used_res,
-            'n_activities':  len(grp),
+            'n_activities':  int((~grp['inventory_only']).sum()),
             'n_exchanges':   len(grp[grp['activity_type'].isin(
                                  ['Respuesta Pública', 'Reenvío', 'Respuesta a reenvío',
                                   'Nota pública', 'Nota privada', 'Nota telefónica'])]),
@@ -546,23 +546,20 @@ gap_th_h = 24
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────
 files_found = sorted(glob.glob(os.path.join(data_dir, "activities_*.json")))
 
-if not files_found:
+if not files_found and not ticket_exports:
     st.error(f"⚠️ No se encontraron archivos `activities_*.json` en `{os.path.abspath(data_dir)}`")
     st.info("Ajusta la variable `data_dir` en el código o coloca los archivos en el directorio raíz.")
     st.stop()
 
 _hash = dir_hash(data_dir)
 df_raw = load_df(data_dir, _hash, tuple(sorted(agent_names.items())))
-if not df_raw.empty:
-    df_raw = filter_traceable_tickets(df_raw)
+df_raw = include_exported_tickets(df_raw, ticket_exports)
 
 if df_raw.empty:
     st.info('No hay actividades disponibles.')
     st.stop()
 
 df_raw = attach_ticket_owners(df_raw)
-df_raw['assigned_agent_name'] = df_raw['assigned_agent_id'].map(
-    lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin asignar')
 
 # Apply timezone offset to timestamps for display
 if not df_raw.empty and 'timestamp' in df_raw.columns and df_raw['timestamp'].notna().any():
@@ -582,6 +579,10 @@ else:
 tmp_prod = df_raw.dropna(subset=['producto']).sort_values('timestamp')
 ticket_prod_map = tmp_prod.groupby('ticket_num')['producto'].last()
 df_raw['ticket_product'] = df_raw['ticket_num'].map(ticket_prod_map).fillna('Sin producto')
+df_raw = apply_ticket_snapshot(df_raw, ticket_exports)
+ticket_prod_map = df_raw.drop_duplicates('ticket_num').set_index('ticket_num')['ticket_product']
+df_raw['assigned_agent_name'] = df_raw['assigned_agent_id'].map(
+    lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin asignar')
 
 tmp_type = df_raw.dropna(subset=['ticket_type']).sort_values('timestamp')
 ticket_type_map = tmp_type.groupby('ticket_num')['ticket_type'].last()
@@ -590,11 +591,17 @@ df_raw['ticket_type'] = df_raw['ticket_num'].map(ticket_type_map).fillna('Sin ti
 sla_full = compute_sla(df_raw, sla_resp_h, sla_res_h)
 sla_full['producto'] = sla_full['ticket_num'].map(ticket_prod_map).fillna('Sin producto')
 sla_full['ticket_type'] = sla_full['ticket_num'].map(ticket_type_map).fillna('Sin tipo')
+snapshot_status = {int(t['display_id']): t.get('status_name', 'Sin estado registrado')
+                   for t in ticket_exports}
+inventory_ids = set(df_raw.loc[df_raw['inventory_only'], 'ticket_num'])
+inventory_mask = sla_full['ticket_num'].isin(inventory_ids)
+sla_full.loc[inventory_mask, 'last_status'] = sla_full.loc[inventory_mask, 'ticket_num'].map(snapshot_status)
+sla_full.loc[inventory_mask, 'is_resolved'] = sla_full.loc[inventory_mask, 'last_status'].isin(['Resolved', 'Closed'])
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("###  Freshdesk Monitor")
-    st.caption('Solo tickets con creación registrada desde el 15/04/2026.')
+    st.caption('Tickets creados desde el 15/04/2026, incluidos los que no tienen actividades descargadas.')
 
     with st.expander(" Filtros", expanded=True):
         sel_tickets = st.multiselect("Tickets", sorted(df_raw['ticket_id'].unique()), placeholder="Todos")
@@ -605,7 +612,7 @@ with st.sidebar:
             for e in json.load(open(fp, encoding='utf-8'))))
         person_label = lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin asignar'
         sel_agents = st.multiselect('Agente asignado', agent_options, format_func=person_label,
-                                   placeholder='Todos', help='Última asignación registrada en los archivos cargados.')
+                                   placeholder='Todos', help='Asignación de la exportación de tickets, actualizada con cambios posteriores disponibles.')
         sel_customers = st.multiselect('Cliente solicitante', sorted(df_raw['customer_id'].unique()),
                                       format_func=lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin cliente registrado',
                                       placeholder='Todos')
@@ -643,7 +650,7 @@ st.markdown("#  Freshdesk IGNITE Dashboard")
 meta_cols = st.columns(4)
 meta_cols[0].caption(f"🗀 {len(files_found)} archivos cargados")
 meta_cols[1].caption(f"✉︎ {df_raw['ticket_num'].nunique()} tickets")
-meta_cols[2].caption(f"⌨ {len(df_raw)} actividades")
+meta_cols[2].caption(f"⌨ {(~df_raw['inventory_only']).sum()} actividades")
 meta_cols[3].caption(f"🗓 {df_raw['date'].min()} → {df_raw['date'].max()}" if not df_raw.empty else "")
 
 # Apply filters
@@ -664,6 +671,20 @@ if dff.empty:
 # SLA filtered to visible tickets
 visible_tickets = dff['ticket_id'].unique()
 sla_df = sla_full[sla_full['ticket_id'].isin(visible_tickets)]
+selected_ticket_count = len(visible_tickets)
+without_history = dff[dff['inventory_only']].copy()
+if not without_history.empty:
+    st.metric('Tickets con los filtros seleccionados', selected_ticket_count)
+    st.info(f'{len(without_history)} tickets incluidos no tienen actividades descargadas. '
+            'Se incluyen por su asignación y producto; no tienen tiempos de respuesta calculables.')
+    st.dataframe(without_history[['ticket_id', 'assigned_agent_name', 'ticket_product']].rename(
+        columns={'ticket_id': 'Ticket', 'assigned_agent_name': 'Agente asignado',
+                 'ticket_product': 'Producto'}), hide_index=True, use_container_width=True)
+# Inventory records are not events and must not inflate activity charts or audit logs.
+dff = dff[~dff['inventory_only']].copy()
+if dff.empty:
+    st.info('No hay actividades disponibles para estos tickets.')
+    st.stop()
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
 T = st.tabs([
@@ -681,7 +702,7 @@ T = st.tabs([
 # TAB 1 — OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
 with T[0]:
-    n_tickets   = dff['ticket_num'].nunique()
+    n_tickets   = selected_ticket_count
     n_acts      = len(dff)
     n_agents    = dff[dff['performer_type'] == 'user']['performer_id'].nunique()
     n_resolved  = sla_df['is_resolved'].sum()
@@ -1812,7 +1833,7 @@ with T[5]:
 with T[6]:
     st.markdown("<div class='sec-header'>TRÁFICO DE CASOS</div>", unsafe_allow_html=True)
 
-    casos_recibidos = dff['ticket_num'].nunique()
+    casos_recibidos = selected_ticket_count
     casos_resueltos = sla_df['is_resolved'].sum()
 
     tc1, tc2, tc3 = st.columns(3)

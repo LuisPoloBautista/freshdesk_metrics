@@ -1,11 +1,47 @@
 import unittest
 import pandas as pd
 from ticket_filters import attach_ticket_owners, filter_owners, survey_ticket_numbers, filter_participants
-from ticket_filters import filter_traceable_tickets
+from ticket_filters import filter_traceable_tickets, apply_ticket_snapshot, include_exported_tickets
 from datetime import date
 
 
 class OwnershipTests(unittest.TestCase):
+    def test_export_includes_tickets_without_creation_or_any_activity(self):
+        df = pd.DataFrame([
+            (1, 'Note', date(2026, 5, 1), pd.Timestamp('2026-05-01', tz='UTC')),
+            (3, 'Note', date(2026, 5, 1), pd.Timestamp('2026-05-01', tz='UTC')),
+        ], columns=['ticket_num', 'activity_type', 'date', 'timestamp'])
+        tickets = [dict(display_id=n, created_at=created, priority=2)
+                   for n, created in [(1, '2026-04-15T00:00:00Z'),
+                                      (2, '2026-04-20T00:00:00Z'),
+                                      (3, '2026-04-14T00:00:00Z')]]
+        result = include_exported_tickets(df, tickets)
+        self.assertEqual(set(result.ticket_num), {1, 2})
+        self.assertEqual(result.loc[result.inventory_only, 'ticket_num'].tolist(), [2])
+        self.assertFalse(result.activity_type.eq('Ticket Creado').any())
+        empty_result = include_exported_tickets(pd.DataFrame(), tickets)
+        self.assertEqual(set(empty_result.ticket_num), {1, 2})
+        self.assertTrue(empty_result.inventory_only.all())
+
+    def test_snapshot_corrects_ownership_product_and_preserves_newer_changes(self):
+        df = pd.DataFrame([
+            (1, '2026-08-01T00:00:00Z', True, True, 'Old', 'a', 'c', 'Old'),
+            (2, '2026-09-10T00:00:00Z', True, True, 'New', 'b', 'd', 'New'),
+            (3, '2026-08-01T00:00:00Z', True, True, 'Old', 'a', 'c', 'Old'),
+        ], columns=['ticket_num', 'timestamp', 'has_agent_id', 'has_requester_id',
+                    'producto', 'assigned_agent_id', 'customer_id', 'ticket_product'])
+        tickets = [dict(display_id=n, responder_id=123, requester_id=456,
+                        updated_at='2026-09-09T00:00:00Z',
+                        custom_field={'cf_producto_3748365': 'Myloft'}) for n in (1, 2)]
+        tickets.append(dict(display_id=3, responder_id=None, requester_id=None,
+                            updated_at='2026-09-09T00:00:00Z',
+                            custom_field={'cf_producto_3748365': None}))
+        result = apply_ticket_snapshot(df, tickets)
+        self.assertEqual(result.assigned_agent_id.tolist(), ['123', 'b', ''])
+        self.assertEqual(result.customer_id.tolist(), ['456', 'd', ''])
+        self.assertEqual(result.ticket_product.tolist(), ['Myloft', 'New', 'Sin producto'])
+        pd.testing.assert_frame_equal(apply_ticket_snapshot(df, []), df)
+
     def test_traceability_requires_creation_since_cutoff(self):
         df = pd.DataFrame([
             (1, 'Ticket Creado', date(2026, 4, 14)),
