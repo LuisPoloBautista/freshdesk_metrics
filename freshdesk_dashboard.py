@@ -17,6 +17,7 @@ import plotly.graph_objects as go
 import networkx as nx
 from collections import defaultdict
 from ticket_filters import normalize_id, attach_ticket_owners, filter_owners, survey_ticket_numbers, filter_participants
+from ticket_filters import filter_traceable_tickets
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -552,6 +553,8 @@ if not files_found:
 
 _hash = dir_hash(data_dir)
 df_raw = load_df(data_dir, _hash, tuple(sorted(agent_names.items())))
+if not df_raw.empty:
+    df_raw = filter_traceable_tickets(df_raw)
 
 if df_raw.empty:
     st.info('No hay actividades disponibles.')
@@ -591,6 +594,7 @@ sla_full['ticket_type'] = sla_full['ticket_num'].map(ticket_type_map).fillna('Si
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("###  Freshdesk Monitor")
+    st.caption('Solo tickets con creación registrada desde el 15/04/2026.')
 
     with st.expander(" Filtros", expanded=True):
         sel_tickets = st.multiselect("Tickets", sorted(df_raw['ticket_id'].unique()), placeholder="Todos")

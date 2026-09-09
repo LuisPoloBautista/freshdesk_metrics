@@ -1,9 +1,22 @@
 import unittest
 import pandas as pd
 from ticket_filters import attach_ticket_owners, filter_owners, survey_ticket_numbers, filter_participants
+from ticket_filters import filter_traceable_tickets
+from datetime import date
 
 
 class OwnershipTests(unittest.TestCase):
+    def test_traceability_requires_creation_since_cutoff(self):
+        df = pd.DataFrame([
+            (1, 'Ticket Creado', date(2026, 4, 14)),
+            (1, 'Reply', date(2026, 4, 16)),
+            (2, 'Ticket Creado', date(2026, 4, 15)),
+            (2, 'Reply', date(2026, 4, 16)),
+            (3, 'Reply', date(2026, 4, 16)),
+        ], columns=['ticket_num', 'activity_type', 'date'])
+        result = filter_traceable_tickets(df)
+        self.assertEqual(result.ticket_num.tolist(), [2, 2])
+
     def test_participation_independent_of_assignment_and_matching_activity(self):
         df = pd.DataFrame([
             (1, 'a', 'user', 'Reply', 'b', 'c'),

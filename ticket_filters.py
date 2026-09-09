@@ -1,5 +1,14 @@
 """Ticket ownership is independent of the author of an activity."""
 
+from datetime import date
+
+
+def filter_traceable_tickets(df, start_date=date(2026, 4, 15)):
+    """Require a recorded creation on or after the reporting start date."""
+    created = df['activity_type'].eq('Ticket Creado') & df['date'].ge(start_date)
+    ticket_numbers = df.loc[created, 'ticket_num'].unique()
+    return df[df['ticket_num'].isin(ticket_numbers) & df['date'].ge(start_date)].copy()
+
 def normalize_id(value):
     if value is None or str(value).strip() in ('', '0', 'None', 'nan'):
         return ''
