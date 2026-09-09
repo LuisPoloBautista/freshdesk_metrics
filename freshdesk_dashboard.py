@@ -664,8 +664,21 @@ if sel_productos:
     dff = dff[dff['ticket_product'].isin(sel_productos)]
 dff = filter_participants(dff, sel_participants)
 
+T = st.tabs([
+    "𓃑 Overview",
+    "🔍︎ Trazabilidad",
+    "⌛︎ SLA y tiempos",
+    "𖨆 Agentes y clientes",
+    "⚠ Cuellos de botella",
+    "🖧 Grafo de relaciones",
+    "⏱ Tráfico de casos",
+    "</> Datos en bruto",
+])
+
 if dff.empty:
-    st.info('No hay tickets con los filtros seleccionados.')
+    for tab in T:
+        with tab:
+            st.info('No hay tickets con los filtros seleccionados.')
     st.stop()
 
 # SLA filtered to visible tickets
@@ -683,20 +696,25 @@ if not without_history.empty:
 # Inventory records are not events and must not inflate activity charts or audit logs.
 dff = dff[~dff['inventory_only']].copy()
 if dff.empty:
-    st.info('No hay actividades disponibles para estos tickets.')
+    for index, tab in enumerate(T):
+        with tab:
+            if index == 0:
+                st.metric('Tickets', selected_ticket_count)
+                st.metric('Actividades disponibles', 0)
+            elif index == 1:
+                st.dataframe(without_history[['ticket_id', 'assigned_agent_name', 'ticket_product']].rename(
+                    columns={'ticket_id': 'Ticket', 'assigned_agent_name': 'Agente asignado',
+                             'ticket_product': 'Producto'}), hide_index=True, use_container_width=True)
+            elif index == 6:
+                st.dataframe(sla_df[['ticket_id', 'last_status']].rename(
+                    columns={'ticket_id': 'Ticket', 'last_status': 'Estado'}),
+                    hide_index=True, use_container_width=True)
+            st.info('Los tickets seleccionados no tienen actividades descargadas. '
+                    'El historial y sus indicadores se mostrarán cuando estén disponibles.')
     st.stop()
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
-T = st.tabs([
-    "𓃑 Overview",
-    "🔍︎ Trazabilidad",
-    "⌛︎ SLA y tiempos",
-    "𖨆 Agentes y clientes",
-    "⚠ Cuellos de botella",
-    "🖧 Grafo de relaciones",
-    "⏱ Tráfico de casos",
-    "</> Datos en bruto",
-])
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — OVERVIEW
