@@ -16,6 +16,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import networkx as nx
 from collections import defaultdict
+from ticket_filters import normalize_id, attach_ticket_owners, filter_owners, survey_ticket_numbers, filter_participants
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -244,6 +245,8 @@ def classify_act(act: dict) -> str:
             5: 'Nota telefónica',
             6: 'Nota de difusión',
         }.get(act['note'].get('type', -1), 'Nota')
+    if 'agent_id' in act or 'group' in act:
+        return 'Asignación'
     if 'status' in act:
         return 'Cambio de Estado'
     if 'automation' in act:
@@ -254,8 +257,6 @@ def classify_act(act: dict) -> str:
         return 'Campo Actualizado'
     if 'added_tags' in act:
         return 'Etiqueta Añadida'
-    if 'agent_id' in act or 'group' in act:
-        return 'Asignación'
     if 'due_by' in act:
         return 'Fecha Límite'
     if 'added_watcher' in act:
@@ -317,7 +318,7 @@ def dir_hash(directory: str) -> str:
 # ─── DATA LOADING ─────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner="⏳ Cargando actividades...")
-def load_df(directory: str, _file_hash: str, agent_names_tuple: tuple) -> pd.DataFrame:
+def load_df(directory: str, file_hash: str, agent_names_tuple: tuple) -> pd.DataFrame:
     agent_names = dict(agent_names_tuple)
     files = sorted(glob.glob(os.path.join(directory, "activities_*.json")))
     raw = []
@@ -342,6 +343,10 @@ def load_df(directory: str, _file_hash: str, agent_names_tuple: tuple) -> pd.Dat
         ticket_type = act.get('ticket_type', None)
         
         rows.append({
+            'agent_id': normalize_id(act.get('agent_id')),
+            'has_agent_id': 'agent_id' in act,
+            'requester_id': normalize_id(act.get('requester_id')),
+            'has_requester_id': 'requester_id' in act,
             'timestamp':      dt,
             'date':           dt.date() if dt else None,
             'hour':           dt.hour if dt else None,
@@ -362,7 +367,7 @@ def load_df(directory: str, _file_hash: str, agent_names_tuple: tuple) -> pd.Dat
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values('timestamp').reset_index(drop=True)
+        df = df.sort_values('timestamp', kind='stable').reset_index(drop=True)
     return df
 
 SLA_CONFIG = {
@@ -494,7 +499,7 @@ def apply_theme(fig, height=300):
 
 def load_names():
     names = {}
-    for fp in ["actores/AllAgents0.json", "actores/Users0.json"]:
+    for fp in sorted(glob.glob("actores/Users*.json")) + sorted(glob.glob("actores/AllAgents*.json")):
         try:
             with open(fp, encoding='utf-8') as f:
                 for entry in json.load(f):
@@ -506,18 +511,31 @@ def load_names():
 
 
 @st.cache_data(show_spinner="⏳ Cargando encuestas de satisfacción...")
-def load_survey():
+def load_survey(file_hash: str):
     try:
-        with open("encuesta/Surveys0.json", encoding='utf-8') as f:
-            data = json.load(f)
-        results = data[0]['survey'].get('survey_results', [])
+        results = []
+        for fp in sorted(glob.glob('encuesta/Surveys*.json')):
+            with open(fp, encoding='utf-8') as f:
+                for entry in json.load(f):
+                    results.extend(entry['survey'].get('survey_results', []))
         return pd.DataFrame(results)
     except (FileNotFoundError, json.JSONDecodeError, IndexError, KeyError):
         return pd.DataFrame()
 
 data_dir = "."
 agent_names = load_names()
-survey_raw = load_survey()
+survey_hash = hashlib.sha256(b''.join(
+    open(fp, 'rb').read() for fp in sorted(glob.glob('encuesta/Surveys*.json'))
+)).hexdigest()
+survey_raw = load_survey(survey_hash)
+# Freshdesk surveys reference internal IDs; activity exports use display_id.
+ticket_exports = [
+    entry['helpdesk_ticket']
+    for fp in sorted(glob.glob('3748365/Tickets*.json'))
+    for entry in json.load(open(fp, encoding='utf-8'))
+]
+if not survey_raw.empty:
+    survey_raw['ticket_num'] = survey_ticket_numbers(survey_raw, ticket_exports)
 tz_offset = -6
 sla_resp_h = 8
 sla_all_resp_h = 24
@@ -535,13 +553,13 @@ if not files_found:
 _hash = dir_hash(data_dir)
 df_raw = load_df(data_dir, _hash, tuple(sorted(agent_names.items())))
 
-# Only include tickets whose creation is present in the downloaded history.
-# This prevents older tickets with isolated recent activities from appearing
-# without their initial fields (product, priority, type, etc.).
-created_ticket_nums = df_raw.loc[
-    df_raw['activity_type'] == 'Ticket Creado', 'ticket_num'
-].unique()
-df_raw = df_raw[df_raw['ticket_num'].isin(created_ticket_nums)].copy()
+if df_raw.empty:
+    st.info('No hay actividades disponibles.')
+    st.stop()
+
+df_raw = attach_ticket_owners(df_raw)
+df_raw['assigned_agent_name'] = df_raw['assigned_agent_id'].map(
+    lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin asignar')
 
 # Apply timezone offset to timestamps for display
 if not df_raw.empty and 'timestamp' in df_raw.columns and df_raw['timestamp'].notna().any():
@@ -577,8 +595,26 @@ with st.sidebar:
     with st.expander(" Filtros", expanded=True):
         sel_tickets = st.multiselect("Tickets", sorted(df_raw['ticket_id'].unique()), placeholder="Todos")
 
-        human_agents = sorted(a for a in df_raw['performer_name'].unique() if '⚙️' not in a)
-        sel_agents = st.multiselect("Agentes y clientes", human_agents, placeholder="Todos")
+        agent_options = sorted(set(df_raw['assigned_agent_id']) | set(
+            normalize_id(e['user']['id'])
+            for fp in glob.glob('actores/AllAgents*.json')
+            for e in json.load(open(fp, encoding='utf-8'))))
+        person_label = lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin asignar'
+        sel_agents = st.multiselect('Agente asignado', agent_options, format_func=person_label,
+                                   placeholder='Todos', help='Última asignación registrada en los archivos cargados.')
+        sel_customers = st.multiselect('Cliente solicitante', sorted(df_raw['customer_id'].unique()),
+                                      format_func=lambda value: agent_names.get(value, f'ID {value}') if value else 'Sin cliente registrado',
+                                      placeholder='Todos')
+        participant_options = sorted(df_raw.loc[
+            df_raw['performer_type'].ne('system'), 'performer_id'].unique())
+        sel_participants = st.multiselect(
+            'Participante en actividades', participant_options, format_func=person_label,
+            placeholder='Todos',
+            help='Tickets donde alguna de las personas seleccionadas realizó una actividad, '
+                 'aunque no esté asignada. Respeta el tipo de actividad y las fechas elegidas. '
+                 'Se muestran también las actividades de otras personas de esos tickets.')
+        st.caption('Los filtros se combinan. Para buscar participación sin importar la asignación, '
+                   'deja Agente asignado vacío.')
 
         sel_types = st.multiselect("Tipo actividad", sorted(df_raw['activity_type'].unique()), placeholder="Todos")
 
@@ -609,12 +645,17 @@ meta_cols[3].caption(f"🗓 {df_raw['date'].min()} → {df_raw['date'].max()}" i
 # Apply filters
 dff = df_raw.copy()
 if sel_tickets: dff = dff[dff['ticket_id'].isin(sel_tickets)]
-if sel_agents:  dff = dff[dff['performer_name'].isin(sel_agents)]
+dff = filter_owners(dff, sel_agents, sel_customers)
 if sel_types:   dff = dff[dff['activity_type'].isin(sel_types)]
 if date_range and len(date_range) == 2:
     dff = dff[(dff['date'] >= date_range[0]) & (dff['date'] <= date_range[1])]
 if sel_productos:
     dff = dff[dff['ticket_product'].isin(sel_productos)]
+dff = filter_participants(dff, sel_participants)
+
+if dff.empty:
+    st.info('No hay tickets con los filtros seleccionados.')
+    st.stop()
 
 # SLA filtered to visible tickets
 visible_tickets = dff['ticket_id'].unique()
@@ -1426,10 +1467,12 @@ with T[3]:
     # ── SATISFACCIÓN ──
     st.markdown("<div class='sec-header'>SATISFACCIÓN DE CLIENTES</div>", unsafe_allow_html=True)
 
-    if not survey_raw.empty:
-        survey = survey_raw.copy()
+    if not survey_raw.empty and survey_raw['ticket_num'].isin(dff['ticket_num'].map(normalize_id)).any():
+        survey = survey_raw[survey_raw['surveyable_type'].eq('Helpdesk::Ticket') &
+                            survey_raw['ticket_num'].isin(
+                                dff['ticket_num'].map(normalize_id))].copy()
         survey['agent_name'] = survey['agent_id'].apply(
-            lambda x: agent_names.get(str(int(x)), 'No asignado') if pd.notna(x) else 'No asignado')
+            lambda x: agent_names.get(str(int(x)), f'Agente ID {int(x)}') if pd.notna(x) else 'No asignado')
         survey['customer_name'] = survey['customer_id'].apply(
             lambda x: agent_names.get(str(int(x)), str(x)) if pd.notna(x) else '—')
         survey['rating_label'] = survey['rating'].map({1: '😊 Feliz', 2: '😐 Neutral', 3: '☹️ Insatisfecho'})
@@ -1542,7 +1585,7 @@ with T[3]:
                 with st.expander(f"{emoji} {rlabel} — {len(subset)} ticket(s)"):
                     st.dataframe(subset, use_container_width=True, hide_index=True)
     else:
-        st.caption("ℹ️ No se encontraron datos de encuestas de satisfacción en `encuesta/Surveys0.json`.")
+        st.caption("ℹ️ No hay encuestas para los tickets seleccionados en los archivos `encuesta/Surveys*.json`.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — CUELLOS DE BOTELLA
@@ -1850,11 +1893,11 @@ with T[7]:
     st.markdown("<div class='sec-header'>AUDIT LOG COMPLETO — TODAS LAS ACTIVIDADES</div>",
                 unsafe_allow_html=True)
 
-    log = dff[['timestamp_local', 'ticket_id', 'performer_name',
+    log = dff[['timestamp_local', 'ticket_id', 'assigned_agent_name', 'performer_name',
                'performer_type', 'activity_type', 'detail']].copy()
     log['timestamp_local'] = log['timestamp_local'].apply(
         lambda x: x.strftime('%d/%m/%Y %H:%M:%S') if x else '—')
-    log.columns = ['⏰ Timestamp', '🎫 Ticket', '👤 Actor', 'Tipo Actor',
+    log.columns = ['⏰ Timestamp', '🎫 Ticket', 'Agente asignado', '👤 Actor', 'Tipo Actor',
                    '🏷️ Actividad', '📝 Detalle']
 
     st.write(f"**{len(log)}** actividades en el rango seleccionado")
