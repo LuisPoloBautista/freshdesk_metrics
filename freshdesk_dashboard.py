@@ -1147,19 +1147,20 @@ with T[2]:
         if subset.empty:
             continue
         with st.expander(f"☰ Tickets {prio} ({len(subset)})"):
-            cols = ['ticket_id', 'last_status', 'ttfr_h', 'resolution_h', 'max_gap_h', 'n_agents']
+            cols = ['ticket_id', 'producto', 'last_status', 'ttfr_h', 'resolution_h', 'max_gap_h', 'n_agents']
             tbl = subset[cols].copy()
             tbl['ttfr_h'] = tbl['ttfr_h'].apply(lambda x: f"{x:.1f}h ({x/24:.1f}d)" if pd.notna(x) else '—')
             tbl['resolution_h'] = tbl['resolution_h'].apply(lambda x: f"{x:.1f}h ({x/24:.1f}d)" if pd.notna(x) else '—')
             tbl['max_gap_h'] = tbl['max_gap_h'].apply(lambda x: f"{x:.1f}h ({x/24:.1f}d)" if pd.notna(x) else '—')
-            st.dataframe(
-                tbl.rename(columns={
-                    'ticket_id': 'Ticket', 'last_status': 'Estado',
+            tbl = tbl.rename(columns={
+                    'ticket_id': 'Ticket', 'producto': 'Producto', 'last_status': 'Estado',
                     'ttfr_h': 'Tiempo de 1ra res', 'resolution_h': 'Resolución',
                     'max_gap_h': 'Max Brecha', 'n_agents': '# Agentes y clientes',
-                }),
-                use_container_width=True, hide_index=True,
-            )
+                })
+            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            st.download_button(
+                f'Descargar tickets de prioridad {prio}', tbl.to_csv(index=False).encode('utf-8-sig'),
+                file_name=f'tickets_sla_{prio.lower()}.csv', mime='text/csv', key=f'download_sla_{prio}')
 
     # ── Desglose por categoría SLA ──
     st.markdown("<div class='sec-header'>DESGLOSE POR CATEGORÍA SLA</div>", unsafe_allow_html=True)
@@ -1200,13 +1201,21 @@ with T[2]:
 
     with st.expander(f"⁴⁰⁴ Tickets que incumplieron SLA ({n_breach})"):
         if n_breach:
-            st.dataframe(fmt_tbl(sla_df[any_breach], show_breach=True), use_container_width=True, hide_index=True)
+            breach_table = fmt_tbl(sla_df[any_breach], show_breach=True)
+            st.dataframe(breach_table, use_container_width=True, hide_index=True)
+            st.download_button('Descargar tickets que incumplieron SLA',
+                               breach_table.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='tickets_incumplieron_sla.csv', mime='text/csv')
         else:
             st.caption("Ninguno")
 
     with st.expander(f"✓ Tickets que cumplieron SLA ({n_ok})"):
         if n_ok:
-            st.dataframe(fmt_tbl(sla_df[~any_breach]), use_container_width=True, hide_index=True)
+            compliant_table = fmt_tbl(sla_df[~any_breach])
+            st.dataframe(compliant_table, use_container_width=True, hide_index=True)
+            st.download_button('Descargar tickets que cumplieron SLA',
+                               compliant_table.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='tickets_cumplieron_sla.csv', mime='text/csv')
         else:
             st.caption("Ninguno")
 
@@ -1401,18 +1410,24 @@ with T[2]:
         return styles
 
     tbl = sla_df[[
-        'ticket_id', 'priority', 'last_status', 'n_activities', 'n_exchanges',
+        'ticket_id', 'producto', 'priority', 'last_status', 'n_activities', 'n_exchanges',
         'ttfr_h', 'resolution_h', 'max_gap_h', 'avg_gap_h',
         'n_agents', 'reopen_count', 'ttfr_breach', 'ttr_breach'
     ]].copy()
     tbl['ttfr_d'] = (tbl['ttfr_h'] / 24).round(1)
     tbl['resolution_d'] = (tbl['resolution_h'] / 24).round(1)
+    st.download_button('Descargar tabla SLA completa',
+                       tbl.rename(columns={'ticket_id': 'Ticket', 'producto': 'Producto',
+                                           'priority': 'Prioridad', 'last_status': 'Estado'}
+                                  ).to_csv(index=False).encode('utf-8-sig'),
+                       file_name='tabla_sla_completa.csv', mime='text/csv')
 
     st.dataframe(
         tbl.style.apply(highlight_row, axis=1),
         use_container_width=True, hide_index=True,
         column_config={
             'ticket_id':    'Ticket',
+            'producto':     'Producto',
             'priority':     'Prioridad',
             'last_status':  'Estado',
             'n_activities': '# Acts',
