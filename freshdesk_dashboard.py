@@ -1495,6 +1495,7 @@ with T[3]:
     
 
     infl = human.groupby('performer_name').agg(
+        productos      = ('ticket_product', lambda values: ', '.join(sorted(values.fillna('Sin producto').unique()))),
         actividades    = ('activity_type', 'count'),
         tickets_únicos = ('ticket_id', 'nunique'),
         respuestas     = ('activity_type', lambda x: (x == 'Respuesta Pública').sum()),
@@ -1520,7 +1521,9 @@ with T[3]:
     fig.update_coloraxes(showscale=False)
     fig.update_layout(xaxis_tickangle=-30)
     st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(infl, use_container_width=True, hide_index=True)
+    st.caption('Productos de los tickets en los que participó cada persona, según los filtros seleccionados.')
+    st.dataframe(infl, use_container_width=True, hide_index=True,
+                 column_config={'productos': st.column_config.TextColumn('Productos')})
 
     # ── SATISFACCIÓN ──
     st.markdown("<div class='sec-header'>SATISFACCIÓN DE CLIENTES</div>", unsafe_allow_html=True)
