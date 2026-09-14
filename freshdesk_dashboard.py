@@ -1174,6 +1174,36 @@ with T[2]:
     sc2.metric("Incumplieron SLA", f"{n_breach} ({n_breach/len(sla_df)*100:.0f}%)" if len(sla_df) else "0", delta_color="inverse")
     sc3.metric("Cumplieron SLA", f"{n_ok} ({n_ok/len(sla_df)*100:.0f}%)" if len(sla_df) else "0")
 
+    if not sla_df.empty:
+        product_sla = sla_df[['producto']].copy()
+        product_sla['Resultado SLA'] = any_breach.map({
+            True: 'Incumplieron SLA', False: 'Cumplieron SLA',
+        })
+        product_sla = product_sla.groupby(['producto', 'Resultado SLA']).size().reset_index(name='Tickets')
+        product_sla['Porcentaje'] = (
+            product_sla['Tickets'] / product_sla.groupby('producto')['Tickets'].transform('sum') * 100
+        )
+        fig_product_sla = px.bar(
+            product_sla, x='producto', y='Tickets', color='Resultado SLA',
+            text='Tickets', barmode='stack',
+            title='Cumplimiento SLA por producto',
+            labels={'producto': 'Producto'},
+            color_discrete_map={'Cumplieron SLA': '#15803d', 'Incumplieron SLA': '#b91c1c'},
+            category_orders={
+                'producto': sorted(product_sla['producto'].unique()),
+                'Resultado SLA': ['Cumplieron SLA', 'Incumplieron SLA'],
+            },
+            hover_data={'Porcentaje': ':.1f'},
+        )
+        apply_theme(fig_product_sla, height=380)
+        fig_product_sla.update_yaxes(dtick=1 if product_sla['Tickets'].max() < 10 else None)
+        st.plotly_chart(fig_product_sla, use_container_width=True)
+        st.caption('Cada ticket se cuenta una vez por producto. Incumple SLA si supera el objetivo '
+                   'de primera respuesta, todas las respuestas o resolución. '
+                   'El porcentaje se calcula sobre el total de tickets del producto.')
+    else:
+        st.info('No hay tickets para mostrar el cumplimiento SLA por producto.')
+
     def breach_label(row):
         labels = []
         if row['ttfr_breach']:   labels.append('1ra Respuesta')
