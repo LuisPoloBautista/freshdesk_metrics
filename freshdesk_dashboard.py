@@ -1067,6 +1067,40 @@ with T[1]:
     )
     st.plotly_chart(fig, use_container_width=True)
 
+    # Activities performed by people, using the same ticket and active filters.
+    person_activity = t_df[t_df['performer_type'].ne('system')].copy()
+    if person_activity.empty:
+        st.info('No hay actividades realizadas por personas para este ticket con los filtros actuales.')
+    else:
+        person_activity['performer_name'] = person_activity['performer_name'].fillna('Sin identificar')
+        activity_counts = (
+            person_activity.groupby(['performer_name', 'activity_type'])
+            .size().reset_index(name='cantidad')
+        )
+        person_order = (
+            activity_counts.groupby('performer_name')['cantidad']
+            .sum().sort_values(ascending=False).index.tolist()
+        )
+        fig_people = px.bar(
+            activity_counts, x='cantidad', y='performer_name',
+            color='activity_type', orientation='h', barmode='stack',
+            color_discrete_map=COLOR_MAP,
+            category_orders={'performer_name': person_order},
+            labels={'cantidad': 'Cantidad de actividades',
+                    'performer_name': 'Persona', 'activity_type': 'Actividad'},
+            title=f'Actividades por persona — Ticket #{sel_t}',
+            text='cantidad', custom_data=['activity_type'],
+        )
+        fig_people.update_traces(
+            hovertemplate='Persona: %{y}<br>Actividad: %{customdata[0]}'
+                          '<br>Cantidad: %{x}<extra></extra>',
+            textposition='auto',
+        )
+        apply_theme(fig_people, height=max(340, 45 * len(person_order) + 120))
+        fig_people.update_xaxes(dtick=1, rangemode='tozero')
+        fig_people.update_yaxes(automargin=True)
+        st.plotly_chart(fig_people, use_container_width=True)
+
     # Gap visualization between events
     t_valid = t_df.dropna(subset=['timestamp_local']).copy()
     if len(t_valid) > 1:
