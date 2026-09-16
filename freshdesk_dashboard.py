@@ -1030,13 +1030,14 @@ with T[1]:
     # Agrupar por tipo de actividad para mostrar leyenda en el gráfico
     fig = go.Figure()
     for act_type, grp in t_df.groupby('activity_type'):
-        x_vals, y_vals, hover_texts = [], [], []
+        x_vals, y_vals, hover_texts, person_names = [], [], [], []
         for _, row in grp.iterrows():
             if row['timestamp'] is None:
                 continue
             ts_disp = row['timestamp_local'] if 'timestamp_local' in row and row['timestamp_local'] else row['timestamp']
             x_vals.append(ts_disp)
             y_vals.append(row['activity_type'])
+            person_names.append(row['performer_name'])
             hover_texts.append(
                 f"<b>{row['activity_type']}</b><br>"
                 f"🕐 {ts_disp.strftime('%d/%m/%Y %H:%M') if ts_disp else '—'}<br>"
@@ -1047,11 +1048,15 @@ with T[1]:
         fig.add_trace(go.Scatter(
             x=x_vals,
             y=y_vals,
-            mode='markers',
+            mode='markers+text',
             marker=dict(size=14, color=color, line=dict(width=1.5, color='#ffffff'),
                         symbol='circle'),
-            text=hover_texts,
-            hovertemplate="%{text}<br><extra></extra>",
+            text=person_names,
+            textposition='top center',
+            textfont=dict(size=11, color='#172033'),
+            cliponaxis=False,
+            hovertext=hover_texts,
+            hovertemplate="%{hovertext}<br><extra></extra>",
             name=act_type,
             showlegend=True,
         ))
@@ -1066,39 +1071,6 @@ with T[1]:
         yaxis=dict(showgrid=True, gridcolor='#e2e8f0', linecolor='#cbd5e1'),
     )
     st.plotly_chart(fig, use_container_width=True)
-
-    # Keep individual events on a time axis, colored by the person acting.
-    timed_activity = t_df.dropna(subset=['timestamp_local']).sort_values('timestamp_local').copy()
-    timed_activity['elapsed'] = timed_activity['timestamp_local'].diff().dt.total_seconds().div(3600).apply(
-        lambda hours: fmt_hours(hours) if pd.notna(hours) else 'Primera acción visible'
-    )
-    person_activity = timed_activity[timed_activity['performer_type'].ne('system')].copy()
-    if person_activity.empty:
-        st.info('No hay actividades realizadas por personas para este ticket con los filtros actuales.')
-    else:
-        person_activity['performer_name'] = person_activity['performer_name'].fillna('Sin identificar')
-        person_order = person_activity['performer_name'].unique().tolist()
-        fig_people = px.scatter(
-            person_activity, x='timestamp_local', y='performer_name',
-            color='performer_name', color_discrete_sequence=COLOR_SEQ,
-            category_orders={'performer_name': person_order},
-            labels={'timestamp_local': f'Tiempo (UTC{tz_offset:+d})',
-                    'performer_name': 'Persona', 'activity_type': 'Actividad'},
-            title=f'Línea de tiempo por persona — Ticket #{sel_t}',
-            custom_data=['activity_type', 'detail', 'elapsed'],
-        )
-        fig_people.update_traces(
-            marker=dict(size=14, line=dict(width=1.5, color='#ffffff')),
-            hovertemplate='Persona: %{y}<br>Fecha: %{x|%d/%m/%Y %H:%M:%S}'
-                          '<br>Actividad: %{customdata[0]}<br>Detalle: %{customdata[1]}'
-                          '<br>Desde la acción anterior: %{customdata[2]}<extra></extra>',
-        )
-        apply_theme(fig_people, height=max(340, 45 * len(person_order) + 120))
-        fig_people.update_xaxes(type='date', tickformat='%d/%m/%Y<br>%H:%M', showgrid=True)
-        fig_people.update_yaxes(automargin=True)
-        st.plotly_chart(fig_people, use_container_width=True)
-        st.caption('Cada punto representa una acción. Pasa el cursor para ver la fecha, la actividad '
-                   'y el tiempo desde la acción anterior del ticket dentro de los filtros actuales.')
 
     # Gap visualization between events
     t_valid = t_df.dropna(subset=['timestamp_local']).copy()
