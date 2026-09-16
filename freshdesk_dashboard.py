@@ -1067,39 +1067,38 @@ with T[1]:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Activities performed by people, using the same ticket and active filters.
-    person_activity = t_df[t_df['performer_type'].ne('system')].copy()
+    # Keep individual events on a time axis, colored by the person acting.
+    timed_activity = t_df.dropna(subset=['timestamp_local']).sort_values('timestamp_local').copy()
+    timed_activity['elapsed'] = timed_activity['timestamp_local'].diff().dt.total_seconds().div(3600).apply(
+        lambda hours: fmt_hours(hours) if pd.notna(hours) else 'Primera acción visible'
+    )
+    person_activity = timed_activity[timed_activity['performer_type'].ne('system')].copy()
     if person_activity.empty:
         st.info('No hay actividades realizadas por personas para este ticket con los filtros actuales.')
     else:
         person_activity['performer_name'] = person_activity['performer_name'].fillna('Sin identificar')
-        activity_counts = (
-            person_activity.groupby(['performer_name', 'activity_type'])
-            .size().reset_index(name='cantidad')
-        )
-        person_order = (
-            activity_counts.groupby('performer_name')['cantidad']
-            .sum().sort_values(ascending=False).index.tolist()
-        )
-        fig_people = px.bar(
-            activity_counts, x='cantidad', y='performer_name',
-            color='activity_type', orientation='h', barmode='stack',
-            color_discrete_map=COLOR_MAP,
+        person_order = person_activity['performer_name'].unique().tolist()
+        fig_people = px.scatter(
+            person_activity, x='timestamp_local', y='performer_name',
+            color='performer_name', color_discrete_sequence=COLOR_SEQ,
             category_orders={'performer_name': person_order},
-            labels={'cantidad': 'Cantidad de actividades',
+            labels={'timestamp_local': f'Tiempo (UTC{tz_offset:+d})',
                     'performer_name': 'Persona', 'activity_type': 'Actividad'},
-            title=f'Actividades por persona — Ticket #{sel_t}',
-            text='cantidad', custom_data=['activity_type'],
+            title=f'Línea de tiempo por persona — Ticket #{sel_t}',
+            custom_data=['activity_type', 'detail', 'elapsed'],
         )
         fig_people.update_traces(
-            hovertemplate='Persona: %{y}<br>Actividad: %{customdata[0]}'
-                          '<br>Cantidad: %{x}<extra></extra>',
-            textposition='auto',
+            marker=dict(size=14, line=dict(width=1.5, color='#ffffff')),
+            hovertemplate='Persona: %{y}<br>Fecha: %{x|%d/%m/%Y %H:%M:%S}'
+                          '<br>Actividad: %{customdata[0]}<br>Detalle: %{customdata[1]}'
+                          '<br>Desde la acción anterior: %{customdata[2]}<extra></extra>',
         )
         apply_theme(fig_people, height=max(340, 45 * len(person_order) + 120))
-        fig_people.update_xaxes(dtick=1, rangemode='tozero')
+        fig_people.update_xaxes(type='date', tickformat='%d/%m/%Y<br>%H:%M', showgrid=True)
         fig_people.update_yaxes(automargin=True)
         st.plotly_chart(fig_people, use_container_width=True)
+        st.caption('Cada punto representa una acción. Pasa el cursor para ver la fecha, la actividad '
+                   'y el tiempo desde la acción anterior del ticket dentro de los filtros actuales.')
 
     # Gap visualization between events
     t_valid = t_df.dropna(subset=['timestamp_local']).copy()
