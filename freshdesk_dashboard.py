@@ -1048,28 +1048,40 @@ with T[1]:
         fig.add_trace(go.Scatter(
             x=x_vals,
             y=y_vals,
-            mode='markers+text',
+            mode='markers',
             marker=dict(size=14, color=color, line=dict(width=1.5, color='#ffffff'),
                         symbol='circle'),
-            text=person_names,
-            textposition='top center',
-            textfont=dict(size=11, color='#172033'),
-            cliponaxis=False,
             hovertext=hover_texts,
             hovertemplate="%{hovertext}<br><extra></extra>",
             name=act_type,
             showlegend=True,
         ))
+        # Stagger labels above and below the event row; arrows identify each point.
+        label_offsets = [(-35, -32), (35, 32), (-35, -68), (35, 68)]
+        for index, (event_time, event_type, person_name) in enumerate(zip(x_vals, y_vals, person_names)):
+            offset_x, offset_y = label_offsets[index % len(label_offsets)]
+            fig.add_annotation(
+                x=event_time, y=event_type, xref='x', yref='y',
+                text=person_name, showarrow=True,
+                ax=offset_x, ay=offset_y, axref='pixel', ayref='pixel',
+                arrowhead=2, arrowsize=1, arrowwidth=1, arrowcolor=color,
+                standoff=8,
+                font=dict(size=11, color='#172033'),
+                bgcolor='rgba(255,255,255,0.95)',
+                bordercolor=color, borderwidth=1, borderpad=3,
+            )
 
     fig.update_layout(
         **PLOT_CFG,
-        height=420,
+        height=max(420, 190 * t_df['activity_type'].nunique() + 160),
         title=f"Línea de tiempo — Ticket #{sel_t}",
         xaxis_title=f"Tiempo (UTC{tz_offset:+d})",
         yaxis_title="Tipo de Evento",
         xaxis=dict(showgrid=True, gridcolor='#e2e8f0', linecolor='#cbd5e1'),
         yaxis=dict(showgrid=True, gridcolor='#e2e8f0', linecolor='#cbd5e1'),
     )
+    fig.update_yaxes(range=[-0.6, max(0, t_df['activity_type'].nunique() - 1) + 0.6], automargin=True)
+    fig.update_layout(margin=dict(t=60, b=50, l=100, r=100))
     st.plotly_chart(fig, use_container_width=True)
 
     # Gap visualization between events
