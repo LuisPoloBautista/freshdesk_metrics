@@ -18,6 +18,7 @@ import networkx as nx
 from collections import defaultdict
 from ticket_filters import normalize_id, attach_ticket_owners, filter_owners, survey_ticket_numbers, filter_participants
 from ticket_filters import include_exported_tickets, apply_ticket_snapshot
+from freshdesk_export_ui import render_export_tab
 
 # ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -544,6 +545,21 @@ sla_res_h = 360
 gap_th_h = 24
 
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────
+st.markdown("#  Freshdesk IGNITE Dashboard")
+T = st.tabs([
+    "𓃑 Overview",
+    "🔍︎ Trazabilidad",
+    "⌛︎ SLA y tiempos",
+    "𖨆 Agentes y clientes",
+    "⚠ Cuellos de botella",
+    "🖧 Grafo de relaciones",
+    "⏱ Tráfico de casos",
+    "</> Datos en bruto",
+    "📥 Exportación por institución/contacto",
+])
+with T[8]:
+    render_export_tab()
+
 files_found = sorted(glob.glob(os.path.join(data_dir, "activities_*.json")))
 
 if not files_found and not ticket_exports:
@@ -645,7 +661,6 @@ with st.sidebar:
         st.rerun()
 
 # ─── MAIN AREA ────────────────────────────────────────────────────────────────
-st.markdown("#  Freshdesk IGNITE Dashboard")
 
 meta_cols = st.columns(4)
 meta_cols[0].caption(f"🗀 {len(files_found)} archivos cargados")
@@ -664,19 +679,8 @@ if sel_productos:
     dff = dff[dff['ticket_product'].isin(sel_productos)]
 dff = filter_participants(dff, sel_participants)
 
-T = st.tabs([
-    "𓃑 Overview",
-    "🔍︎ Trazabilidad",
-    "⌛︎ SLA y tiempos",
-    "𖨆 Agentes y clientes",
-    "⚠ Cuellos de botella",
-    "🖧 Grafo de relaciones",
-    "⏱ Tráfico de casos",
-    "</> Datos en bruto",
-])
-
 if dff.empty:
-    for tab in T:
+    for tab in T[:8]:
         with tab:
             st.info('No hay tickets con los filtros seleccionados.')
     st.stop()
@@ -696,7 +700,7 @@ if not without_history.empty:
 # Inventory records are not events and must not inflate activity charts or audit logs.
 dff = dff[~dff['inventory_only']].copy()
 if dff.empty:
-    for index, tab in enumerate(T):
+    for index, tab in enumerate(T[:8]):
         with tab:
             if index == 0:
                 st.metric('Tickets', selected_ticket_count)

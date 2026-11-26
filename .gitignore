@@ -28,3 +28,6 @@ __pycache__/
 
 # Logs
 logs/
+
+# Exportaciones privadas de contactos, tickets y conversaciones
+exports/
