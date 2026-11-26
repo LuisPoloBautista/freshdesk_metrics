@@ -9,12 +9,14 @@ consulta Freshdesk. Laura realiza el análisis de los datos disponibles.
 
 1. Abrir **Exportación por institución/contacto**.
 2. Los contactos e instituciones se cargan automáticamente desde los archivos del proyecto.
-3. Revisar **Revisar asociaciones de contactos** para ver contactos sin institución
-   y posibles duplicados. Se puede descargar la auditoría desde ahí.
-4. Elegir **Institución** o **Contacto** y seleccionar el registro por nombre e ID.
-5. Elegir fechas, producto y estados, o dejarlos vacíos para incluir el histórico.
+3. Elegir **Institución** o **Contacto** y seleccionar el registro por nombre e ID.
+   **Contactos y pendientes de este grupo** muestra sus asociaciones, cruces
+   provisionales, candidatos ambiguos y posibles duplicados. El selector incluye
+   **Sin institución / pendientes de asignar** para consultar los contactos no resueltos.
+   El botón **Descargar cruce de este grupo** prepara el cruce por identificadores.
+4. Elegir fechas, producto y estados, o dejarlos vacíos para incluir el histórico.
    Las notas internas requieren marcar su opción explícita.
-6. Pulsar **Consultar y preparar descarga**, revisar conteos y cobertura por contacto,
+5. Pulsar **Consultar y preparar descarga**, revisar conteos y cobertura por contacto,
    y descargar CSV, JSON o ZIP. El ZIP incluye conversaciones, notas cuando se pidieron,
    histórico disponible y reportes de cobertura. Las referencias a respuestas sin
    cuerpo se identifican como texto no disponible, sin inventar conversaciones.
@@ -48,6 +50,21 @@ tickets que mencionan esa institución pero tienen un contacto sin asociación r
 se listan aparte y se incluyen en `institution_unresolved_tickets.csv`, sin mezclarlos
 con los confirmados. Ese reporte es previo a filtros y sirve para revisar cobertura.
 Los contactos sin tickets también aparecen en el reporte de cobertura.
+
+Valores vacíos, `N/A`, `null`, `Sin institución` y equivalentes no cuentan como
+instituciones ni generan falsos conflictos. Los posibles duplicados por nombre,
+correo o ID externo se señalan dentro de sus grupos, sin fusionarlos ni trasladar
+sus tickets a otro contacto. Un duplicado puede apuntar a un ID de otro grupo;
+eso se muestra para revisión, sin incorporarlo automáticamente.
+
+El ZIP contiene `contact_institution_mapping.csv` y `contacts_unassigned.csv`.
+El cruce distingue `recorded` (asociación registrada en el respaldo), `verified`
+(cruce verificado local), `provisional` (evidencia única en tickets) y `unassigned`.
+Incluye IDs de contacto, institución, tickets de evidencia, candidatos e incidencias.
+Cuando no hay ID de institución de Freshdesk se conserva una clave local estable
+`name:...`, dejando `company_id` vacío; nunca se inventa un ID de Freshdesk.
+La revisión refleja los archivos locales disponibles, no el estado actual de Freshdesk,
+y no modifica la plataforma. Los cruces verificados se mantienen en el catálogo local.
 
 Los nombres y correos de contactos, institución del contacto e institución del ticket
 acompañan a los IDs en CSV/JSON. Las notas internas disponibles se guardan por separado

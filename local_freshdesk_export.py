@@ -10,6 +10,10 @@ import unicodedata
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
+UNASSIGNED_GROUP = '__unassigned__'
+MAPPING_FIELDS = ['contact_id', 'contact_name', 'email', 'institution_key', 'company_id',
+                  'institution_name', 'status', 'source', 'evidence_ticket_ids',
+                  'candidate_institution_keys', 'duplicate_contact_ids', 'issues']
 
 
 def normalize(value):
@@ -99,7 +103,7 @@ def load_local_dataset(root=ROOT):
             aliases[normalize(name)].add(f'company:{cid}')
 
     def institution_for_label(label):
-        if not normalize(label):
+        if normalize(label) in ('', 'n/a', 'na', 'n.a.', 'none', 'null', '-', 'sin institucion', 'sin empresa', 'no aplica'):
             return ''
         candidates = aliases[normalize(label)]
         if len(candidates) == 1:
@@ -233,6 +237,11 @@ def load_local_dataset(root=ROOT):
                     index[normalize(value)].add(uid)
         duplicates.extend({'field': field, 'value': value, 'contact_ids': sorted(ids)}
                           for value, ids in index.items() if len(ids) > 1)
+    for uid, contact in contacts.items():
+        contact['duplicate_contact_ids'] = sorted({other for group in duplicates if uid in group['contact_ids']
+                                                   for other in group['contact_ids'] if other != uid})
+        if contact['duplicate_contact_ids']:
+            contact['issues'].append('posible_duplicado')
     for t in tickets.values():
         contact = contacts.get(t['requester_id'], {})
         for field in ['created_at', 'updated_at']:
@@ -247,6 +256,44 @@ def load_local_dataset(root=ROOT):
     return {'tickets': tickets, 'contacts': contacts, 'institutions': institutions,
             'duplicates': duplicates, 'errors': errors, 'sources': sources,
             'signature': source_signature(root)}
+
+
+def contact_mapping(dataset, contact_ids=None):
+    """A reproducible crosswalk; local institution keys are never Freshdesk IDs."""
+    rows = []
+    for uid, contact in sorted(dataset['contacts'].items()):
+        if contact_ids is not None and uid not in contact_ids:
+            continue
+        for key in contact['institution_keys'] or ['']:
+            source = contact['mapping_source']
+            status = ('provisional' if source == 'provisional_from_ticket_institution' else
+                      'unassigned' if not key else 'verified' if source == 'verified_local_mapping' else 'recorded')
+            rows.append({
+                'contact_id': uid, 'contact_name': contact.get('name'), 'email': contact.get('email'),
+                'institution_key': key, 'company_id': key.split(':', 1)[1] if key.startswith('company:') else '',
+                'institution_name': dataset['institutions'].get(key, ''), 'status': status, 'source': source,
+                'evidence_ticket_ids': sorted(t['id'] for t in dataset['tickets'].values()
+                                              if t['requester_id'] == uid and key and t['institution_key'] == key),
+                'candidate_institution_keys': contact.get('institution_candidates', []),
+                'duplicate_contact_ids': contact.get('duplicate_contact_ids', []),
+                'issues': contact['issues'],
+            })
+    return rows
+
+
+def institution_group(dataset, mode, selected_id):
+    contacts = dataset['contacts']
+    if mode == 'contact':
+        assigned = {selected_id} if selected_id in contacts else set()
+    elif selected_id == UNASSIGNED_GROUP:
+        assigned = {uid for uid, c in contacts.items() if not c['institution_keys']}
+    else:
+        assigned = {uid for uid, c in contacts.items() if selected_id in c['institution_keys']}
+    pending = {uid for uid, c in contacts.items() if mode == 'institution' and uid not in assigned
+               and selected_id in c.get('institution_candidates', [])}
+    ids = assigned | pending
+    return {'assigned_ids': assigned, 'pending_ids': pending, 'mapping': contact_mapping(dataset, ids),
+            'duplicates': [g for g in dataset['duplicates'] if set(g['contact_ids']) & ids]}
 
 
 def csv_bytes(rows, fields):
@@ -271,10 +318,8 @@ def query_local(dataset, mode, selected_id, start=None, end=None, date_field='cr
     if start and end and start > end:
         raise ValueError('La fecha inicial debe ser anterior o igual a la final.')
     contacts = dataset['contacts']
-    if mode == 'contact':
-        contact_ids = {selected_id} if selected_id in contacts else set()
-    else:
-        contact_ids = {uid for uid, c in contacts.items() if selected_id in c['institution_keys']}
+    group = institution_group(dataset, mode, selected_id)
+    contact_ids = group['assigned_ids']
     candidates = [t for t in dataset['tickets'].values() if t['requester_id'] in contact_ids]
     unresolved = [{'id': t['id'], 'contact_id': t['requester_id'], 'contact_name': t['contact_name'],
                    'subject': t.get('subject'), 'institution_label': t.get('institution_label'),
@@ -328,7 +373,10 @@ def query_local(dataset, mode, selected_id, start=None, end=None, date_field='cr
             'No se unen contactos por nombre; cada contacto mantiene su ID de origen.',
         ],
     }
-    return {'tickets': chosen, 'coverage': coverage, 'manifest': manifest, 'unresolved': unresolved}
+    manifest['unassigned_contact_ids_in_group'] = sorted({r['contact_id'] for r in group['mapping'] if r['status'] == 'unassigned'})
+    manifest['possible_duplicate_groups'] = group['duplicates']
+    return {'tickets': chosen, 'coverage': coverage, 'manifest': manifest, 'unresolved': unresolved,
+            'mapping': group['mapping']}
 
 
 def build_downloads(result):
@@ -344,6 +392,8 @@ def build_downloads(result):
     # Private text remains in separate files, even when explicitly included.
     exported = [{k: v for k, v in t.items() if k not in ('private_notes', 'activity_history')} for t in tickets]
     files = {'tickets.csv': csv_bytes(tickets, fields), 'tickets.json': json_bytes(exported),
+             'contact_institution_mapping.csv': csv_bytes(result['mapping'], MAPPING_FIELDS),
+             'contacts_unassigned.csv': csv_bytes([r for r in result['mapping'] if r['status'] == 'unassigned'], MAPPING_FIELDS),
              'conversations_public.csv': csv_bytes(public, ['ticket_id', 'id', 'contact_name', 'created_at', 'user_id',
                                                           'type', 'body_text', 'body', 'text_available']),
              'coverage_by_contact.csv': csv_bytes(result['coverage'], ['contact_id', 'contact_name', 'institution_names',

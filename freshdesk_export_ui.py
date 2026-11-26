@@ -2,7 +2,8 @@
 from datetime import date
 import pandas as pd
 import streamlit as st
-from local_freshdesk_export import ROOT, build_downloads, csv_bytes, load_local_dataset, query_local, source_signature
+from local_freshdesk_export import ROOT, build_downloads, load_local_dataset, query_local, source_signature
+from local_freshdesk_export import UNASSIGNED_GROUP, MAPPING_FIELDS, institution_group, csv_bytes
 
 ASSOCIATION_LABELS = {
     'contact_company_id': 'Institución del contacto',
@@ -23,7 +24,7 @@ def render_export_tab():
                'Los filtros laterales no limitan esta consulta; sin fechas se incluye todo el histórico local disponible.')
     for key in ['export_api_key', 'export_identity', 'export_catalog', 'export_domain']:
         st.session_state.pop(key, None)
-    signature = source_signature(ROOT)
+    signature = 'grouped-associations-v2:' + source_signature(ROOT)
     if st.session_state.get('export_local_signature') != signature:
         st.session_state.pop('export_result', None)
         st.session_state['export_local_signature'] = signature
@@ -35,37 +36,40 @@ def render_export_tab():
         st.info('No hay tickets disponibles en los archivos locales.')
         return
     contacts = dataset['contacts']
-    audit = [{'contact_id': uid, 'name': c.get('name'), 'email': c.get('email'),
-              'institutions': c['institution_names'], 'mapping_source': ASSOCIATION_LABELS[c['mapping_source']],
-              'issues': c['issues']} for uid, c in contacts.items()]
-    with st.expander('Revisar asociaciones de contactos'):
-        a, b, c = st.columns(3)
-        a.metric('Contactos', len(contacts))
-        b.metric('Sin institución asignada', sum(not c['institution_keys'] for c in contacts.values()))
-        c.metric('Posibles duplicados', len(dataset['duplicates']))
-        st.caption('Las asociaciones por ID y los cruces verificados tienen prioridad. '
-                   'Las deducidas de una única institución en los tickets se señalan como provisionales. '
-                   'Los casos con varias instituciones posibles quedan para revisión.')
-        st.dataframe(pd.DataFrame(audit).rename(columns={
-            'contact_id': 'ID contacto', 'name': 'Contacto', 'email': 'Correo',
-            'institutions': 'Instituciones', 'mapping_source': 'Asociación', 'issues': 'Pendientes'}),
-            hide_index=True, use_container_width=True)
-        if dataset['duplicates']:
-            st.dataframe(pd.DataFrame(dataset['duplicates']), hide_index=True, use_container_width=True)
-        st.download_button('Descargar auditoría de contactos',
-                           csv_bytes(audit, ['contact_id', 'name', 'email', 'institutions', 'mapping_source', 'issues']),
-                           'auditoria_contactos.csv', 'text/csv', key='export_audit_download')
     mode = st.radio('Consultar por', ['Institución', 'Contacto'], horizontal=True, key='export_mode')
     if mode == 'Institución':
-        labels = dataset['institutions']
+        labels = {**dataset['institutions'], UNASSIGNED_GROUP: 'Sin institución / pendientes de asignar'}
     else:
         labels = {uid: f"{c.get('name') or 'Sin nombre'} · {' / '.join(c['institution_names']) or 'Sin institución'} · ID {uid}"
                   for uid, c in contacts.items()}
     if not labels:
         st.info('No hay registros identificados para esta consulta.')
         return
-    selected_id = st.selectbox(mode, sorted(labels, key=lambda key: labels[key].casefold()),
+    selected_id = st.selectbox(mode, sorted(labels, key=lambda key: (key == UNASSIGNED_GROUP, labels[key].casefold())),
                                format_func=labels.get, key='export_selected_' + mode)
+    group = institution_group(dataset, 'institution' if mode == 'Institución' else 'contact', selected_id)
+    with st.expander('Contactos y pendientes de este grupo', expanded=True):
+        assigned, provisional, pending = st.columns(3)
+        assigned.metric('Contactos del grupo', len(group['assigned_ids']))
+        provisional.metric('Cruces provisionales', len({r['contact_id'] for r in group['mapping'] if r['status'] == 'provisional'}))
+        pending.metric('Pendientes de asociación', len({r['contact_id'] for r in group['mapping'] if r['status'] == 'unassigned'}))
+        records = [{'ID contacto': r['contact_id'], 'Contacto': r['contact_name'],
+                    'Institución': r['institution_name'] or 'Sin asignar',
+                    'Asociación': ASSOCIATION_LABELS[r['source']],
+                    'Revisión': ', '.join(r['issues']),
+                    'Posibles duplicados (IDs)': ', '.join(r['duplicate_contact_ids'])}
+                   for r in group['mapping']]
+        st.dataframe(pd.DataFrame(records), hide_index=True, use_container_width=True)
+        if group['pending_ids']:
+            st.info('Los contactos pendientes aparecen por evidencia en sus tickets, pero no se incorporan '
+                    'automáticamente a esta institución. El cruce conserva sus candidatos e incidencias.')
+        if group['duplicates']:
+            st.warning('Hay posibles duplicados relacionados con este grupo. Se conservan sus IDs y tickets por separado.')
+            st.dataframe(pd.DataFrame(group['duplicates']).rename(columns={
+                'field': 'Coincidencia en', 'value': 'Valor', 'contact_ids': 'IDs relacionados'}),
+                hide_index=True, use_container_width=True)
+        st.download_button('Descargar cruce de este grupo', csv_bytes(group['mapping'], MAPPING_FIELDS),
+                           'cruce_contactos_institucion.csv', 'text/csv', key='export_group_mapping')
     st.caption('Por institución se incluyen todos los tickets de sus contactos vinculados. '
                'Los tickets con institución registrada pero contacto sin asociación resuelta se señalan por separado.')
     available_dates = sorted(t['created_at'][:10] for t in dataset['tickets'].values() if t.get('created_at'))

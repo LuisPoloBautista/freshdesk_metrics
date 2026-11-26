@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from local_freshdesk_export import build_downloads, load_local_dataset, query_local
+from local_freshdesk_export import build_downloads, load_local_dataset, query_local, contact_mapping, institution_group, UNASSIGNED_GROUP
 
 
 class LocalExportTests(unittest.TestCase):
@@ -113,6 +113,41 @@ class LocalExportTests(unittest.TestCase):
     def test_corrupt_file_reported(self):
         (self.root / 'activities_corrupt.json').write_text('not json')
         self.assertTrue(self.load()['errors'])
+
+    def test_na_is_not_an_institution_or_conflicting_evidence(self):
+        self.tickets = [self.ticket(1, 99, 'UTP'), self.ticket(2, 99, 'N/A')]
+        self.save_tickets()
+        data = self.load()
+        self.assertNotIn('name:n/a', data['institutions'])
+        self.assertEqual(data['contacts']['99']['institution_keys'], ['company:7'])
+        self.assertEqual(data['contacts']['99']['mapping_source'], 'provisional_from_ticket_institution')
+        self.assertEqual(len(query_local(data, 'institution', 'company:7')['tickets']), 2)
+
+    def test_group_reports_candidates_duplicates_and_crosswalk(self):
+        data = self.load()
+        group = institution_group(data, 'institution', 'company:7')
+        self.assertEqual(group['pending_ids'], {'13'})
+        self.assertEqual(group['duplicates'][0]['contact_ids'], ['10', '11'])
+        self.assertIn('posible_duplicado', data['contacts']['10']['issues'])
+        result = query_local(data, 'institution', 'company:7')
+        files, _ = build_downloads(result)
+        rows = list(csv.DictReader(io.StringIO(files['contacts_unassigned.csv'].decode('utf-8-sig'))))
+        self.assertEqual([r['contact_id'] for r in rows], ['13'])
+        self.assertEqual(rows[0]['company_id'], '')
+        self.assertIn('contact_institution_mapping.csv', files)
+
+    def test_unassigned_group_keeps_all_tickets_of_ambiguous_contact(self):
+        result = query_local(self.load(), 'institution', UNASSIGNED_GROUP)
+        self.assertEqual({t['id'] for t in result['tickets']}, {'4', '5'})
+        self.assertEqual(result['mapping'][0]['status'], 'unassigned')
+
+    def test_local_institution_key_is_not_fabricated_freshdesk_id(self):
+        self.tickets = [self.ticket(1, 99, 'Local school')]
+        self.save_tickets()
+        row = next(r for r in contact_mapping(self.load()) if r['contact_id'] == '99')
+        self.assertEqual(row['institution_key'], 'name:local school')
+        self.assertEqual(row['company_id'], '')
+        self.assertEqual(row['status'], 'provisional')
 
     def test_freshdesk_day_first_activity_dates_update_and_filter_correctly(self):
         self.write('activities_test.json', {'activities_data': [
