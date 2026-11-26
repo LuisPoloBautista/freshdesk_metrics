@@ -2,32 +2,69 @@
 
 Implementación para [la entrega de Freshdesk en Notion](https://app.notion.com/p/41d40e1f2a2c8180b8abd9c98f6db8de).
 La herramienta está integrada en la pestaña **Exportación por institución/contacto**
-del dashboard. También se puede ejecutar en PowerShell mediante `export_freshdesk.ps1`.
-Laura realiza el análisis; una persona autorizada
-con credenciales de Freshdesk ejecuta la extracción.
+del dashboard y utiliza los archivos locales existentes. No pide API key y no
+consulta Freshdesk. Laura realiza el análisis de los datos disponibles.
 
 ## Desde el dashboard
 
 1. Abrir **Exportación por institución/contacto**.
-2. Introducir el dominio y la API key personal de Freshdesk, y pulsar **Cargar contactos e instituciones**.
-   No se utiliza automáticamente la clave compartida del servidor. Cada sesión usa
-   los permisos de su propia clave; no se guardan credenciales en las descargas.
+2. Los contactos e instituciones se cargan automáticamente desde los archivos del proyecto.
 3. Revisar **Revisar asociaciones de contactos** para ver contactos sin institución
    y posibles duplicados. Se puede descargar la auditoría desde ahí.
 4. Elegir **Institución** o **Contacto** y seleccionar el registro por nombre e ID.
-   Opcionalmente cargar el CSV de cruce provisional.
 5. Elegir fechas, producto y estados, o dejarlos vacíos para incluir el histórico.
    Las notas internas requieren marcar su opción explícita.
 6. Pulsar **Consultar y preparar descarga**, revisar conteos y cobertura por contacto,
    y descargar CSV, JSON o ZIP. El ZIP incluye conversaciones, notas cuando se pidieron,
-   histórico disponible y reportes de cobertura. Los errores se señalan como resultado parcial.
+   histórico disponible y reportes de cobertura. Las referencias a respuestas sin
+   cuerpo se identifican como texto no disponible, sin inventar conversaciones.
 
 Los filtros laterales de actividades no afectan esta pestaña; también se puede usar
 si esos filtros no dejan tickets visibles. Los resultados pertenecen a la última
 consulta ejecutada: después de cambiar filtros se debe pulsar de nuevo **Consultar**.
-Se mantienen solamente en la sesión; los archivos temporales se eliminan al terminar
-de preparar la descarga. Cambiar la clave o el dominio elimina los resultados de la
-sesión. **Borrar resultados de esta sesión** permite quitarlos explícitamente.
+Se mantienen solamente en la sesión y se preparan en memoria. Si cambian los archivos
+de origen, se invalida la descarga anterior. **Borrar resultados de esta sesión**
+permite quitarlos explícitamente.
+
+### Fuentes y asociación local
+
+- `3748365/Tickets*.json`: asunto, descripción, solicitante, agente, fechas, estado,
+  producto, campos de institución y SLA disponibles. Se distingue `display_id`
+  (número de ticket) de `id` (identificador interno).
+- `actores/Users*.json` y `actores/AllAgents*.json`: nombres e IDs de personas.
+- `activities_*.json`: cambios posteriores al respaldo e histórico disponible.
+- `institution_directory.json`: nombres de instituciones, alias explícitos e IDs
+  de asociaciones verificadas. No contiene credenciales ni textos de conversaciones.
+- `actores/Companies*.json`, cuando existan: catálogo local adicional de instituciones.
+
+Se une el solicitante por ID, nunca por coincidencia de nombre. Se prefieren
+`company_id` y los cruces verificados del catálogo. Cuando un contacto sin asociación
+aparece con una sola institución en sus tickets, se crea un cruce provisional
+identificado como `provisional_from_ticket_institution`. Si aparecen varias, queda
+como ambiguo. No se asigna por similitud de nombres o dominios de correo.
+
+La consulta de institución reúne los tickets de sus contactos vinculados. Los
+tickets que mencionan esa institución pero tienen un contacto sin asociación resuelta
+se listan aparte y se incluyen en `institution_unresolved_tickets.csv`, sin mezclarlos
+con los confirmados. Ese reporte es previo a filtros y sirve para revisar cobertura.
+Los contactos sin tickets también aparecen en el reporte de cobertura.
+
+Los nombres y correos de contactos, institución del contacto e institución del ticket
+acompañan a los IDs en CSV/JSON. Las notas internas disponibles se guardan por separado
+y solo si se marca su opción. La consulta no hereda el corte de abril del dashboard:
+usa todo el histórico que contienen los archivos locales.
+
+**Límite de los archivos actuales:** las actividades incluyen referencias a notas
+(`id` y `type`), pero no el cuerpo de las respuestas. Las descripciones sí se
+conservan completas cuando existen. La herramienta muestra cuántas referencias no
+tienen texto; no certifica conversaciones completas ni datos posteriores al respaldo.
+Actualizar los archivos del proyecto es lo que actualiza esta pestaña.
+
+## Utilidad opcional por API, independiente del dashboard
+
+Las secciones siguientes describen `export_freshdesk.ps1`, conservado como herramienta
+de administración para consultar Freshdesk directamente. Esta utilidad sí necesita
+credenciales; **la pestaña del dashboard no la ejecuta ni depende de ella**.
 
 ## Preparación y permisos
 

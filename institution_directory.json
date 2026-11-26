@@ -1,0 +1,191 @@
+{
+  "source": "Catálogo local de instituciones verificado el 2026-11-26; sin credenciales ni conversaciones.",
+  "companies": [
+    {
+      "id": 203000296693,
+      "name": "AYA - Instituto de Agua y Alcantarillado",
+      "aliases": [
+        "AYA",
+        "AyA",
+        "Aya - Instituto Costarricense De Acueductos Y Alcantarillados"
+      ]
+    },
+    {
+      "id": 203000592529,
+      "name": "Biblioteca Carlos Monge Alfaro",
+      "aliases": []
+    },
+    {
+      "id": 203000531317,
+      "name": "CIDH Corte Interamericana de Derechos Humanos",
+      "aliases": [
+        "CIDH",
+        "Corte Interamericana de Derechos Humanos",
+        "Corte Interamericana"
+      ]
+    },
+    {
+      "id": 203000530181,
+      "name": "Talisis UNID",
+      "aliases": [
+        "UNID",
+        "Unid Talisis"
+      ]
+    },
+    {
+      "id": 203000582926,
+      "name": "Talisis- U-ERRE",
+      "aliases": [
+        "U-ERRE",
+        "UERRE"
+      ]
+    },
+    {
+      "id": 203000615206,
+      "name": "UACM",
+      "aliases": []
+    },
+    {
+      "id": 203000615205,
+      "name": "UCIMED",
+      "aliases": [
+        "Biblioteca UCIMED"
+      ]
+    },
+    {
+      "id": 203000592450,
+      "name": "UGV Universidad Gerardo Barrios",
+      "aliases": [
+        "Universidad Gerardo Barrios",
+        "UGB"
+      ]
+    },
+    {
+      "id": 203000615210,
+      "name": "UH",
+      "aliases": []
+    },
+    {
+      "id": 203000594067,
+      "name": "UNA Costa Rica Biblioteca Nacional",
+      "aliases": []
+    },
+    {
+      "id": 203000618018,
+      "name": "UNED - universidad Estatal a Distancia",
+      "aliases": [
+        "UNED",
+        "Uned Costa Rica"
+      ]
+    },
+    {
+      "id": 203000615209,
+      "name": "UNIS",
+      "aliases": []
+    },
+    {
+      "id": 203000516504,
+      "name": "UPR",
+      "aliases": [
+        "Pontificia Universidad Catolica de Puerto Rico"
+      ]
+    },
+    {
+      "id": 203000580845,
+      "name": "UTEM - Universidad Tecnológica Metropolitana",
+      "aliases": [
+        "UTEM",
+        "UTEM Chile",
+        "UTEM-Universidad Tecnológica Metropolitana"
+      ]
+    },
+    {
+      "id": 203000530476,
+      "name": "UTP",
+      "aliases": [
+        "UTP - Universidad Tecnológica de Panamá"
+      ]
+    },
+    {
+      "id": 203000522895,
+      "name": "Unachi",
+      "aliases": []
+    },
+    {
+      "id": 203000394496,
+      "name": "Universidad Austral",
+      "aliases": [
+        "Austral"
+      ]
+    },
+    {
+      "id": 203000615204,
+      "name": "Universidad Centroamericana José Simeón Cañas",
+      "aliases": [
+        "UCA"
+      ]
+    },
+    {
+      "id": 203000583304,
+      "name": "Universidad Evangélica de El Salvador - UEES",
+      "aliases": [
+        "UEES",
+        "Universidad Evangélica de El Salvador"
+      ]
+    },
+    {
+      "id": 203000615211,
+      "name": "Universidad Hispanoamericana UH",
+      "aliases": [
+        "Universidad Hispanoamericana"
+      ]
+    },
+    {
+      "id": 203000615208,
+      "name": "Universidad Naval",
+      "aliases": [
+        "U Naval",
+        "UNINAV"
+      ]
+    },
+    {
+      "id": 203000745850,
+      "name": "Universidad Panama",
+      "aliases": [
+        "U Panama"
+      ]
+    },
+    {
+      "id": 203000594302,
+      "name": "Universidad Veracruzana",
+      "aliases": [
+        "UV"
+      ]
+    },
+    {
+      "id": 203000615203,
+      "name": "Universidad de Costa Rica (UCR)",
+      "aliases": [
+        "UCR",
+        "UCR Costa Rica"
+      ]
+    },
+    {
+      "id": 203000682877,
+      "name": "Widgetz.io (sample)",
+      "aliases": []
+    }
+  ],
+  "verified_contact_links": [
+    {
+      "contact_id": 203009343356,
+      "company_id": 203000530476,
+      "evidence": "Verificación del ticket 411 y asociación confirmada en Freshdesk el 2026-11-26"
+    },
+    {
+      "contact_id": 203009776477,
+      "company_id": 203000530476,
+      "evidence": "Confirmación expresa del usuario y asociación confirmada en Freshdesk el 2026-11-26"
+    }
+  ]
+}

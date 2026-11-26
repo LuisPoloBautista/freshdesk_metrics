@@ -1,180 +1,137 @@
-"""Session-isolated Streamlit UI for full-text Freshdesk queries."""
-import hashlib
-import io
-import json
-import tempfile
-import zipfile
+"""Dashboard queries using the same local snapshots as the analytics tabs."""
 from datetime import date
-from pathlib import Path
-from types import SimpleNamespace
-
 import pandas as pd
 import streamlit as st
+from local_freshdesk_export import ROOT, build_downloads, csv_bytes, load_local_dataset, query_local, source_signature
 
-from scripts.export_freshdesk import (
-    Client, DEFAULT_DOMAIN, audit_contacts, export_data, read_mapping,
-    select_contacts, write_csv,
-)
+ASSOCIATION_LABELS = {
+    'contact_company_id': 'Institución del contacto',
+    'verified_local_mapping': 'Asociación verificada',
+    'provisional_from_ticket_institution': 'Provisional: institución en tickets',
+    'unassigned': 'Sin asignar',
+}
 
 
-def package_downloads(folder):
-    # Do not bundle unrelated contacts, credentials, or other institutions.
-    names = ['tickets.csv', 'tickets.json', 'conversations_public.csv',
-             'notes_private.csv', 'notes_private.json', 'coverage_by_contact.csv',
-             'selected_contacts.json', 'activity_history_available.json',
-             'company_tickets_unmapped.json', 'api_pages.json', 'manifest.json', 'mapping_used.json']
-    files = {name: (folder / name).read_bytes() for name in names if (folder / name).exists()}
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    return files, buffer.getvalue()
+@st.cache_data(show_spinner=False)
+def cached_dataset(root, signature):
+    return load_local_dataset(root)
 
 
 def render_export_tab():
     st.subheader('Exportación por contacto e institución')
-    st.caption('Consulta Freshdesk directamente. Los filtros laterales del dashboard no limitan esta consulta. '
-               'Sin rango de fechas se incluye todo el histórico accesible.')
-    st.info('Usa tu propia API key de Freshdesk. La consulta tendrá los permisos de tu cuenta. '
-            'La clave se utiliza en esta sesión y no se guarda en los archivos descargados.')
-    domain = st.text_input('Dominio de Freshdesk', value=DEFAULT_DOMAIN, key='export_domain')
-    key = st.text_input('API key de Freshdesk', type='password', key='export_api_key')
-    fingerprint = hashlib.sha256((domain + '\0' + key).encode()).hexdigest()
-    if st.session_state.get('export_identity') != fingerprint:
-        for name in ['export_catalog', 'export_result', 'export_error']:
-            st.session_state.pop(name, None)
-        st.session_state['export_identity'] = fingerprint
-    if st.button('Cargar contactos e instituciones', key='export_connect', disabled=not key):
+    st.caption('Consulta los archivos cargados en el dashboard, sin API key. '
+               'Los filtros laterales no limitan esta consulta; sin fechas se incluye todo el histórico local disponible.')
+    for key in ['export_api_key', 'export_identity', 'export_catalog', 'export_domain']:
+        st.session_state.pop(key, None)
+    signature = source_signature(ROOT)
+    if st.session_state.get('export_local_signature') != signature:
         st.session_state.pop('export_result', None)
-        st.session_state.pop('export_catalog', None)
-        try:
-            with st.spinner('Consultando contactos e instituciones…'):
-                api = Client(domain.strip(), key.strip())
-                contacts = api.listing('contacts')
-                companies = api.listing('companies')
-                st.session_state['export_catalog'] = {'contacts': contacts, 'companies': companies}
-        except Exception:
-            st.error('No se pudo cargar el catálogo. Revisa el dominio, la API key y los permisos de tu cuenta.')
-    catalog = st.session_state.get('export_catalog')
-    if not catalog:
+        st.session_state['export_local_signature'] = signature
+    dataset = cached_dataset(str(ROOT), signature)
+    if dataset['errors']:
+        st.warning('Algunos archivos no se pudieron leer. La cobertura puede estar incompleta.')
+        st.write(dataset['errors'])
+    if not dataset['tickets']:
+        st.info('No hay tickets disponibles en los archivos locales.')
         return
-    contacts, companies = catalog['contacts'], catalog['companies']
-    audit, duplicates = audit_contacts(contacts, companies)
-    unassigned = [r for r in audit if not r['company_ids']]
+    contacts = dataset['contacts']
+    audit = [{'contact_id': uid, 'name': c.get('name'), 'email': c.get('email'),
+              'institutions': c['institution_names'], 'mapping_source': ASSOCIATION_LABELS[c['mapping_source']],
+              'issues': c['issues']} for uid, c in contacts.items()]
     with st.expander('Revisar asociaciones de contactos'):
         a, b, c = st.columns(3)
         a.metric('Contactos', len(contacts))
-        b.metric('Sin institución', len(unassigned))
-        c.metric('Posibles duplicados', len(duplicates))
-        st.dataframe(pd.DataFrame(audit), hide_index=True, use_container_width=True)
-        if duplicates:
-            st.caption('Las coincidencias son casos para revisar; no se fusionan contactos automáticamente.')
-            st.dataframe(pd.DataFrame(duplicates), hide_index=True, use_container_width=True)
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / 'audit.csv'
-            write_csv(path, audit, ['contact_id', 'name', 'email', 'unique_external_id', 'company_ids', 'company_names', 'issues'])
-            st.download_button('Descargar auditoría de contactos', path.read_bytes(), 'auditoria_contactos.csv',
-                               'text/csv', key='export_audit_download')
+        b.metric('Sin institución asignada', sum(not c['institution_keys'] for c in contacts.values()))
+        c.metric('Posibles duplicados', len(dataset['duplicates']))
+        st.caption('Las asociaciones por ID y los cruces verificados tienen prioridad. '
+                   'Las deducidas de una única institución en los tickets se señalan como provisionales. '
+                   'Los casos con varias instituciones posibles quedan para revisión.')
+        st.dataframe(pd.DataFrame(audit).rename(columns={
+            'contact_id': 'ID contacto', 'name': 'Contacto', 'email': 'Correo',
+            'institutions': 'Instituciones', 'mapping_source': 'Asociación', 'issues': 'Pendientes'}),
+            hide_index=True, use_container_width=True)
+        if dataset['duplicates']:
+            st.dataframe(pd.DataFrame(dataset['duplicates']), hide_index=True, use_container_width=True)
+        st.download_button('Descargar auditoría de contactos',
+                           csv_bytes(audit, ['contact_id', 'name', 'email', 'institutions', 'mapping_source', 'issues']),
+                           'auditoria_contactos.csv', 'text/csv', key='export_audit_download')
     mode = st.radio('Consultar por', ['Institución', 'Contacto'], horizontal=True, key='export_mode')
-    options = companies if mode == 'Institución' else contacts
-    labels = {r['id']: f"{r.get('name') or 'Sin nombre'} · {r['id']}" for r in options}
+    if mode == 'Institución':
+        labels = dataset['institutions']
+    else:
+        labels = {uid: f"{c.get('name') or 'Sin nombre'} · {' / '.join(c['institution_names']) or 'Sin institución'} · ID {uid}"
+                  for uid, c in contacts.items()}
     if not labels:
-        st.info('No hay registros disponibles para esta consulta.')
+        st.info('No hay registros identificados para esta consulta.')
         return
-    selected_id = st.selectbox(mode, sorted(labels, key=lambda i: labels[i].casefold()),
+    selected_id = st.selectbox(mode, sorted(labels, key=lambda key: labels[key].casefold()),
                                format_func=labels.get, key='export_selected_' + mode)
-    st.caption('La consulta por contacto incluye los tickets donde figura como solicitante. '
-               'La consulta por institución reúne los tickets de todos sus contactos, incluidas asociaciones secundarias.')
-    with st.expander('Cruce provisional por identificadores'):
-        st.caption('Opcional: CSV con contact_id, company_id, status y evidence. '
-                   'status: verified o provisional. Se usa solo para esta consulta; no modifica Freshdesk.')
-        mapping_file = st.file_uploader('Cruce contacto–institución', type=['csv'], key='export_mapping')
+    st.caption('Por institución se incluyen todos los tickets de sus contactos vinculados. '
+               'Los tickets con institución registrada pero contacto sin asociación resuelta se señalan por separado.')
+    available_dates = sorted(t['created_at'][:10] for t in dataset['tickets'].values() if t.get('created_at'))
+    products = sorted({t['product'] for t in dataset['tickets'].values() if t.get('product')})
+    status_labels = {2: 'Abierto', 3: 'Pendiente', 4: 'Resuelto', 5: 'Cerrado'}
+    states = sorted({t['status'] for t in dataset['tickets'].values() if t.get('status') is not None}, key=str)
     with st.form('export_query_form'):
         date_filter = st.checkbox('Filtrar por fechas', value=False)
         left, right = st.columns(2)
-        start = left.date_input('Desde (UTC)', value=date.today().replace(day=1))
-        end = right.date_input('Hasta (UTC)', value=date.today())
+        start = left.date_input('Desde (UTC)', value=date.fromisoformat(available_dates[0]) if available_dates else date.today())
+        end = right.date_input('Hasta (UTC)', value=date.fromisoformat(available_dates[-1]) if available_dates else date.today())
         date_field = st.selectbox('Fecha del ticket', ['created_at', 'updated_at'],
-                                  format_func=lambda v: 'Creación' if v == 'created_at' else 'Última actualización')
-        product = st.text_input('Producto (opcional)', help='Nombre exacto del campo Producto; vacío incluye todos.')
-        statuses = st.multiselect('Estado', [2, 3, 4, 5],
-                                  format_func=lambda v: {2: 'Abierto', 3: 'Pendiente', 4: 'Resuelto', 5: 'Cerrado'}[v])
-        include_private = st.checkbox('Incluir notas internas en archivos separados', value=False,
-                                       help='Solo para personal autorizado a leer y recibir estas notas.')
+                                  format_func=lambda value: 'Creación' if value == 'created_at' else 'Última actualización')
+        selected_products = st.multiselect('Producto', products, placeholder='Todos')
+        statuses = st.multiselect('Estado', states, format_func=lambda value: status_labels.get(value, str(value)))
+        include_private = st.checkbox('Incluir notas internas disponibles en archivos separados', value=False)
         submitted = st.form_submit_button('Consultar y preparar descarga')
     if submitted:
         st.session_state.pop('export_result', None)
-        if date_filter and start > end:
-            st.error('La fecha inicial debe ser anterior o igual a la final.')
-        else:
-            try:
-                with st.spinner('Recuperando tickets y todas las páginas de conversaciones…'):
-                    api = Client(domain.strip(), key.strip())
-                    # Refresh membership for every extraction; do not rely on a stale catalog.
-                    current_contacts = api.listing('contacts')
-                    current_companies = api.listing('companies')
-                    st.session_state['export_catalog'] = {'contacts': current_contacts, 'companies': current_companies}
-                    with tempfile.TemporaryDirectory() as temp:
-                        folder = Path(temp)
-                        mapping_path = None
-                        if mapping_file is not None:
-                            mapping_path = folder / 'input_mapping.csv'
-                            mapping_path.write_bytes(mapping_file.getvalue())
-                        mappings = read_mapping(mapping_path, current_contacts, current_companies)
-                        if mapping_path is not None:
-                            mapping_path.unlink()
-                        args = SimpleNamespace(
-                            company_id=selected_id if mode == 'Institución' else None,
-                            contact_id=selected_id if mode == 'Contacto' else None,
-                            start_date=start.isoformat() if date_filter else None,
-                            end_date=end.isoformat() if date_filter else None,
-                            date_field=date_field, status=statuses, product=product.strip() or None,
-                            product_id=None, product_field='cf_producto', include_private_notes=include_private)
-                        selected = select_contacts(current_contacts, mappings, args.contact_id, args.company_id)
-                        if not selected:
-                            raise ValueError('No hay contactos asociados a la selección. Revisa el cruce provisional.')
-                        used_mappings = [m for m in mappings if m['contact_id'] in selected]
-                        (folder / 'mapping_used.json').write_text(json.dumps(used_mappings, ensure_ascii=False), encoding='utf-8')
-                        manifest = export_data(api, selected, args, folder)
-                        files, archive = package_downloads(folder)
-                        tickets = json.loads(files['tickets.json'])
-                        preview = [{k: t.get(k) for k in ['id', 'requester_id', 'subject', 'status', 'created_at', 'updated_at']}
-                                   for t in tickets]
-                        st.session_state['export_result'] = {
-                            'label': labels[selected_id], 'mode': mode, 'manifest': manifest,
-                            'files': files, 'zip': archive, 'preview': preview,
-                            'coverage': pd.read_csv(io.BytesIO(files['coverage_by_contact.csv'])),
-                        }
-            except ValueError as exc:
-                st.error(f'No se pudo preparar la consulta: {exc}')
-            except Exception:
-                st.error('La consulta falló. Revisa permisos y conexión e inténtalo de nuevo. '
-                         'No se presenta una descarga como completa si falla la recuperación.')
+        try:
+            result = query_local(dataset, 'institution' if mode == 'Institución' else 'contact', selected_id,
+                                 start.isoformat() if date_filter else None, end.isoformat() if date_filter else None,
+                                 date_field, selected_products, statuses, include_private)
+            files, archive = build_downloads(result)
+            st.session_state['export_result'] = {**result, 'files': files, 'zip': archive,
+                                                  'label': labels[selected_id], 'mode': mode}
+        except ValueError as exc:
+            st.error(str(exc))
     result = st.session_state.get('export_result')
-    if result:
-        manifest = result['manifest']
-        st.markdown(f"**Última consulta preparada:** {result['mode']} · {result['label']}")
-        st.caption('Las descargas corresponden a esta consulta. Si cambias la selección o los filtros, vuelve a pulsar Consultar.')
-        st.json(manifest['filters'], expanded=False)
-        a, b, c = st.columns(3)
-        a.metric('Contactos incluidos', manifest['contact_count'])
-        b.metric('Tickets', manifest['tickets_exported'])
-        c.metric('Conversaciones públicas', manifest['public_conversations'])
-        if manifest['queries_completed']:
-            st.success('Consulta terminada. Revisa la cobertura por contacto y los límites del histórico.')
-        else:
-            st.warning('Resultado parcial: hay datos que no se pudieron recuperar.')
-            st.write(manifest['errors'])
-        if manifest['company_query_unmapped_ids']:
-            st.warning('Hay tickets de la institución cuyo solicitante no está asociado. Revisa el reporte de cobertura.')
-        st.dataframe(pd.DataFrame(result['preview']), hide_index=True, use_container_width=True)
-        st.dataframe(result['coverage'], hide_index=True, use_container_width=True)
-        suffix = 'parcial' if not manifest['queries_completed'] else 'consulta'
-        st.download_button('Descargar tickets CSV', result['files']['tickets.csv'], f'tickets_{suffix}.csv', 'text/csv')
-        st.download_button('Descargar tickets JSON', result['files']['tickets.json'], f'tickets_{suffix}.json', 'application/json')
-        st.download_button('Descargar paquete completo ZIP', result['zip'], f'freshdesk_{suffix}.zip', 'application/zip')
-        with st.expander('Cobertura y límites de la consulta'):
-            st.json(manifest)
-        if st.button('Borrar resultados de esta sesión', key='export_clear'):
-            st.session_state.pop('export_result', None)
-            st.rerun()
+    if not result:
+        return
+    manifest = result['manifest']
+    st.markdown(f"**Última consulta preparada:** {result['mode']} · {result['label']}")
+    st.caption('Si cambias la selección o los filtros, vuelve a pulsar Consultar para actualizar las descargas.')
+    st.json(manifest['filters'], expanded=False)
+    a, b, c = st.columns(3)
+    a.metric('Contactos incluidos', manifest['contacts'])
+    b.metric('Tickets', manifest['tickets_exported'])
+    c.metric('Respuestas sin texto disponible', manifest['conversation_text_missing'])
+    if manifest['conversation_text_missing']:
+        st.warning('Los archivos de actividades contienen referencias a respuestas, pero no su texto completo. '
+                   'La descarga identifica estas referencias; no equivale a una exportación completa de conversaciones.')
+    st.caption('Se conservan las descripciones y los textos completos que sí estén presentes en los archivos locales.')
+    if result['unresolved']:
+        st.warning('Hay tickets que mencionan esta institución, pero la asociación del contacto es ambigua '
+                   'o está sin resolver. No se mezclan con los tickets asociados; se incluyen en un reporte separado.')
+        st.dataframe(pd.DataFrame(result['unresolved']), hide_index=True, use_container_width=True)
+    preview = [{'Ticket': t['id'], 'Contacto': t['contact_name'],
+                'Institución del contacto': ', '.join(t['contact_institutions']),
+                'Institución del ticket': t['institution_name'], 'Asunto': t.get('subject'),
+                'Producto': t.get('product'), 'Estado': status_labels.get(t.get('status'), t.get('status_name')),
+                'Creado': t.get('created_at'), 'Asociación': ASSOCIATION_LABELS[t['mapping_source']]} for t in result['tickets']]
+    st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
+    with st.expander('Cobertura por contacto', expanded=True):
+        coverage = pd.DataFrame(result['coverage'])
+        if not coverage.empty:
+            coverage['mapping_source'] = coverage['mapping_source'].map(ASSOCIATION_LABELS)
+        st.dataframe(coverage.rename(columns={'contact_id': 'ID contacto', 'contact_name': 'Contacto',
+                     'institution_names': 'Instituciones', 'mapping_source': 'Asociación',
+                     'tickets_before_filters': 'Tickets antes de filtros', 'tickets_exported': 'Tickets incluidos',
+                     'ticket_ids': 'IDs de tickets'}), hide_index=True, use_container_width=True)
+    st.download_button('Descargar tickets CSV', result['files']['tickets.csv'], 'tickets_locales.csv', 'text/csv')
+    st.download_button('Descargar tickets JSON', result['files']['tickets.json'], 'tickets_locales.json', 'application/json')
+    st.download_button('Descargar paquete completo ZIP', result['zip'], 'freshdesk_local.zip', 'application/zip')
+    with st.expander('Cobertura y límites de los datos locales'):
+        st.json(manifest)
+    if st.button('Borrar resultados de esta sesión', key='export_clear'):
+        st.session_state.pop('export_result', None)
+        st.rerun()
