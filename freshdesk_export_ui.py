@@ -39,7 +39,7 @@ def render_export_tab():
     if use_api:
         domain = st.text_input('Dominio de Freshdesk', value=DEFAULT_DOMAIN, key='full_content_domain')
         api_key = st.text_input('API key de Freshdesk', type='password', key='full_content_api_key')
-        st.caption('Introduce la clave aquí, no en el chat. Se usa solo en esta sesión y no se incluye en las descargas. '
+        st.caption('Se usa solo en esta sesión y no se incluye en las descargas. '
                    'Se recupera el contenido de los tickets seleccionados; no se buscan tickets nuevos fuera del respaldo local.')
     identity = hashlib.sha256((content_mode + domain + '\0' + api_key).encode()).hexdigest()
     if st.session_state.get('full_content_identity') != identity:
