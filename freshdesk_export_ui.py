@@ -1,9 +1,12 @@
 """Dashboard queries using the same local snapshots as the analytics tabs."""
 from datetime import date
+import hashlib
 import pandas as pd
 import streamlit as st
 from local_freshdesk_export import ROOT, build_downloads, load_local_dataset, query_local, source_signature
 from local_freshdesk_export import UNASSIGNED_GROUP, MAPPING_FIELDS, institution_group, csv_bytes
+from freshdesk_full_content import fetch_full_content
+from scripts.export_freshdesk import Client, DEFAULT_DOMAIN
 
 ASSOCIATION_LABELS = {
     'contact_company_id': 'Institución del contacto',
@@ -20,8 +23,8 @@ def cached_dataset(root, signature):
 
 def render_export_tab():
     st.subheader('Exportación por contacto e institución')
-    st.caption('Consulta los archivos cargados en el dashboard, sin API key. '
-               'Los filtros laterales no limitan esta consulta; sin fechas se incluye todo el histórico local disponible.')
+    st.caption('Selecciona los tickets del dashboard y descarga su descripción y respuestas completas desde Freshdesk. '
+               'Los filtros laterales no limitan esta consulta.')
     for key in ['export_api_key', 'export_identity', 'export_catalog', 'export_domain']:
         st.session_state.pop(key, None)
     signature = 'grouped-associations-v2:' + source_signature(ROOT)
@@ -29,6 +32,19 @@ def render_export_tab():
         st.session_state.pop('export_result', None)
         st.session_state['export_local_signature'] = signature
     dataset = cached_dataset(str(ROOT), signature)
+    content_mode = st.radio('Contenido de la descarga', ['Texto completo desde Freshdesk', 'Solo datos locales'],
+                            key='full_content_mode', horizontal=True)
+    use_api = content_mode == 'Texto completo desde Freshdesk'
+    domain, api_key = DEFAULT_DOMAIN, ''
+    if use_api:
+        domain = st.text_input('Dominio de Freshdesk', value=DEFAULT_DOMAIN, key='full_content_domain')
+        api_key = st.text_input('API key de Freshdesk', type='password', key='full_content_api_key')
+        st.caption('Introduce la clave aquí, no en el chat. Se usa solo en esta sesión y no se incluye en las descargas. '
+                   'Se recupera el contenido de los tickets seleccionados; no se buscan tickets nuevos fuera del respaldo local.')
+    identity = hashlib.sha256((content_mode + domain + '\0' + api_key).encode()).hexdigest()
+    if st.session_state.get('full_content_identity') != identity:
+        st.session_state.pop('export_result', None)
+        st.session_state['full_content_identity'] = identity
     if dataset['errors']:
         st.warning('Algunos archivos no se pudieron leer. La cobertura puede estar incompleta.')
         st.write(dataset['errors'])
@@ -86,13 +102,22 @@ def render_export_tab():
         selected_products = st.multiselect('Producto', products, placeholder='Todos')
         statuses = st.multiselect('Estado', states, format_func=lambda value: status_labels.get(value, str(value)))
         include_private = st.checkbox('Incluir notas internas disponibles en archivos separados', value=False)
-        submitted = st.form_submit_button('Consultar y preparar descarga')
+        submitted = st.form_submit_button('Consultar y preparar descarga', disabled=use_api and not api_key.strip())
     if submitted:
         st.session_state.pop('export_result', None)
         try:
             result = query_local(dataset, 'institution' if mode == 'Institución' else 'contact', selected_id,
                                  start.isoformat() if date_filter else None, end.isoformat() if date_filter else None,
                                  date_field, selected_products, statuses, include_private)
+            if use_api:
+                client = Client(domain.strip(), api_key.strip())
+                indicator = st.progress(0, text='Recuperando descripciones y respuestas completas…')
+                try:
+                    result = fetch_full_content(result, client, include_private,
+                        progress=lambda done, total: indicator.progress(done / total,
+                            text=f'Recuperando contenido: {done}/{total} tickets'))
+                finally:
+                    indicator.empty()
             files, archive = build_downloads(result)
             st.session_state['export_result'] = {**result, 'files': files, 'zip': archive,
                                                   'label': labels[selected_id], 'mode': mode}
@@ -109,10 +134,19 @@ def render_export_tab():
     a.metric('Contactos incluidos', manifest['contacts'])
     b.metric('Tickets', manifest['tickets_exported'])
     c.metric('Respuestas sin texto disponible', manifest['conversation_text_missing'])
-    if manifest['conversation_text_missing']:
+    if 'remote_content_complete' in manifest:
+        if manifest['remote_content_errors']:
+            st.error('Descarga parcial: no se pudo recuperar todo el contenido de algunos tickets.')
+            st.dataframe(pd.DataFrame(manifest['remote_content_errors']), hide_index=True, use_container_width=True)
+        elif manifest['tickets_exported']:
+            st.success('Descripciones y todas las páginas de respuestas accesibles recuperadas desde Freshdesk.')
+        else:
+            st.info('No hay tickets con los filtros seleccionados.')
+    elif manifest['conversation_text_missing']:
         st.warning('Los archivos de actividades contienen referencias a respuestas, pero no su texto completo. '
                    'La descarga identifica estas referencias; no equivale a una exportación completa de conversaciones.')
-    st.caption('Se conservan las descripciones y los textos completos que sí estén presentes en los archivos locales.')
+    st.caption('CSV conserva texto multilínea. JSON conserva el contenido completo y HTML; '
+               'las notas internas solicitadas se incluyen por separado en el ZIP.')
     if result['unresolved']:
         st.warning('Hay tickets que mencionan esta institución, pero la asociación del contacto es ambigua '
                    'o está sin resolver. No se mezclan con los tickets asociados; se incluyen en un reporte separado.')
@@ -131,9 +165,10 @@ def render_export_tab():
                      'institution_names': 'Instituciones', 'mapping_source': 'Asociación',
                      'tickets_before_filters': 'Tickets antes de filtros', 'tickets_exported': 'Tickets incluidos',
                      'ticket_ids': 'IDs de tickets'}), hide_index=True, use_container_width=True)
-    st.download_button('Descargar tickets CSV', result['files']['tickets.csv'], 'tickets_locales.csv', 'text/csv')
-    st.download_button('Descargar tickets JSON', result['files']['tickets.json'], 'tickets_locales.json', 'application/json')
-    st.download_button('Descargar paquete completo ZIP', result['zip'], 'freshdesk_local.zip', 'application/zip')
+    suffix = ('completo' if manifest['remote_content_complete'] else 'parcial') if 'remote_content_complete' in manifest else 'local'
+    st.download_button('Descargar tickets CSV', result['files']['tickets.csv'], f'tickets_{suffix}.csv', 'text/csv')
+    st.download_button('Descargar tickets JSON', result['files']['tickets.json'], f'tickets_{suffix}.json', 'application/json')
+    st.download_button('Descargar paquete completo ZIP', result['zip'], f'freshdesk_{suffix}.zip', 'application/zip')
     with st.expander('Cobertura y límites de los datos locales'):
         st.json(manifest)
     if st.button('Borrar resultados de esta sesión', key='export_clear'):

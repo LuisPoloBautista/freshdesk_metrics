@@ -2,13 +2,17 @@
 
 Implementación para [la entrega de Freshdesk en Notion](https://app.notion.com/p/41d40e1f2a2c8180b8abd9c98f6db8de).
 La herramienta está integrada en la pestaña **Exportación por institución/contacto**
-del dashboard y utiliza los archivos locales existentes. No pide API key y no
-consulta Freshdesk. Laura realiza el análisis de los datos disponibles.
+del dashboard. Usa los archivos locales para seleccionar contactos y tickets, y
+permite completar sus descripciones y respuestas desde Freshdesk mediante API key.
+Laura realiza el análisis de los datos disponibles.
 
 ## Desde el dashboard
 
 1. Abrir **Exportación por institución/contacto**.
 2. Los contactos e instituciones se cargan automáticamente desde los archivos del proyecto.
+   En **Contenido de la descarga**, elegir **Texto completo desde Freshdesk** e
+   introducir el dominio y la API key en el campo protegido. No enviar la clave
+   por chat. Para trabajar sin conexión, elegir **Solo datos locales**.
 3. Elegir **Institución** o **Contacto** y seleccionar el registro por nombre e ID.
    **Contactos y pendientes de este grupo** muestra sus asociaciones, cruces
    provisionales, candidatos ambiguos y posibles duplicados. El selector incluye
@@ -18,8 +22,9 @@ consulta Freshdesk. Laura realiza el análisis de los datos disponibles.
    Las notas internas requieren marcar su opción explícita.
 5. Pulsar **Consultar y preparar descarga**, revisar conteos y cobertura por contacto,
    y descargar CSV, JSON o ZIP. El ZIP incluye conversaciones, notas cuando se pidieron,
-   histórico disponible y reportes de cobertura. Las referencias a respuestas sin
-   cuerpo se identifican como texto no disponible, sin inventar conversaciones.
+   histórico disponible y reportes de cobertura. En modo texto completo se obtiene
+   la descripción de cada ticket y se recorren todas las páginas de conversaciones.
+   Si falla la API, la información local de respaldo se señala como incompleta.
 
 Los filtros laterales de actividades no afectan esta pestaña; también se puede usar
 si esos filtros no dejan tickets visibles. Los resultados pertenecen a la última
@@ -27,6 +32,30 @@ consulta ejecutada: después de cambiar filtros se debe pulsar de nuevo **Consul
 Se mantienen solamente en la sesión y se preparan en memoria. Si cambian los archivos
 de origen, se invalida la descarga anterior. **Borrar resultados de esta sesión**
 permite quitarlos explícitamente.
+
+### Descripciones y respuestas completas desde Freshdesk
+
+La API key se utiliza en la sesión, sin escribirla en archivos, caché compartida
+ni descargas. Cambiar la clave, dominio o modo invalida los resultados anteriores.
+El acceso está limitado a los permisos de la cuenta de la clave.
+
+Se usa el número visible del ticket (`display_id`) para consultar el detalle
+`/api/v2/tickets/{id}?include=stats` y todas las páginas de
+`/api/v2/tickets/{id}/conversations`. No se utiliza el resumen limitado de
+conversaciones embebidas. Se conservan cuerpo de texto, HTML y metadatos sin recortar.
+Las notas privadas solo se descargan si se marca su opción, en archivos separados
+dentro del ZIP.
+
+Si falla un ticket, se mantiene la información local disponible y se incluye el
+fallo en `remote_content_errors` del manifiesto. La interfaz y los nombres de los
+archivos indican **parcial**. Un cambio de solicitante respecto al respaldo se
+señala para revisar la asociación antes de importar su contenido.
+
+La selección de contactos, tickets y filtros sigue siendo local: esta opción
+completa el contenido de los tickets seleccionados, pero no descubre tickets nuevos
+que todavía no existen en el respaldo. El histórico de cambios sigue limitado a
+los archivos de actividades locales. Los adjuntos se incluyen como metadatos y enlaces,
+no como binarios. Los campos de SLA de la API se conservan separadamente de los del respaldo.
 
 ### Fuentes y asociación local
 
@@ -71,7 +100,7 @@ acompañan a los IDs en CSV/JSON. Las notas internas disponibles se guardan por 
 y solo si se marca su opción. La consulta no hereda el corte de abril del dashboard:
 usa todo el histórico que contienen los archivos locales.
 
-**Límite de los archivos actuales:** las actividades incluyen referencias a notas
+**Límite del modo Solo datos locales:** las actividades incluyen referencias a notas
 (`id` y `type`), pero no el cuerpo de las respuestas. Las descripciones sí se
 conservan completas cuando existen. La herramienta muestra cuántas referencias no
 tienen texto; no certifica conversaciones completas ni datos posteriores al respaldo.
@@ -81,7 +110,8 @@ Actualizar los archivos del proyecto es lo que actualiza esta pestaña.
 
 Las secciones siguientes describen `export_freshdesk.ps1`, conservado como herramienta
 de administración para consultar Freshdesk directamente. Esta utilidad sí necesita
-credenciales; **la pestaña del dashboard no la ejecuta ni depende de ella**.
+credenciales. El dashboard no ejecuta el comando PowerShell; reutiliza el cliente
+de API cuando se elige descargar el contenido completo.
 
 ## Preparación y permisos
 

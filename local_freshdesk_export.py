@@ -388,7 +388,8 @@ def build_downloads(result):
     fields = ['id', 'internal_id', 'subject', 'description_text', 'description_html', 'requester_id',
               'contact_name', 'contact_email', 'contact_institutions', 'institution_name', 'mapping_source',
               'status', 'status_name', 'created_at', 'updated_at', 'responder_id', 'agent_name', 'product',
-              'priority', 'sla', 'description_available', 'conversation_text_missing', 'conversations']
+              'priority', 'sla', 'description_available', 'conversation_text_missing', 'conversations',
+              'content_source', 'content_updated_at', 'remote_content_complete', 'sla_from_freshdesk']
     # Private text remains in separate files, even when explicitly included.
     exported = [{k: v for k, v in t.items() if k not in ('private_notes', 'activity_history')} for t in tickets]
     files = {'tickets.csv': csv_bytes(tickets, fields), 'tickets.json': json_bytes(exported),
