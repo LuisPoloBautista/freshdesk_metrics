@@ -1,6 +1,6 @@
 """Queries over repository snapshots only. No credentials or network requests."""
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 import csv
 import hashlib
 import io
@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import unicodedata
 import zipfile
+import re
+from export_identity import InstitutionIndex, contact_groups
 
 ROOT = Path(__file__).resolve().parent
 UNASSIGNED_GROUP = '__unassigned__'
@@ -62,12 +64,15 @@ def load_local_dataset(root=ROOT):
     root = Path(root)
     users, agents, snapshots, companies, activities = {}, {}, {}, {}, []
     links, errors, sources = [], [], []
+    local_institutions, verified_groups, activity_file_dates = [], [], set()
     for path in source_files(root):
         try:
             data = json.loads(path.read_text(encoding='utf-8-sig'))
             if path.name == 'institution_directory.json':
                 companies.update({identifier(c['id']): c for c in data.get('companies', [])})
                 links = data.get('verified_contact_links', [])
+                local_institutions = data.get('local_institutions', [])
+                verified_groups = data.get('verified_contact_groups', [])
             elif path.name.startswith(('Users', 'AllAgents')):
                 for wrapper in data:
                     user = wrapper.get('user', wrapper)
@@ -92,26 +97,17 @@ def load_local_dataset(root=ROOT):
             else:
                 for activity in data.get('activities_data', []):
                     activities.append({**activity, '_source_file': path.name})
+                match = re.search(r'_(\d{1,2})_(\d{1,2})_(\d{4})\.json$', path.name)
+                if match:
+                    day, month, year = map(int, match.groups())
+                    activity_file_dates.add(date(year, month, day))
             sources.append(str(path.relative_to(root)))
         except (ValueError, KeyError, TypeError, OSError) as exc:
             errors.append(f'{path.name}: {type(exc).__name__}; revisar archivo')
 
-    institutions = {f'company:{cid}': c['name'] for cid, c in companies.items()}
-    aliases = defaultdict(set)
-    for cid, c in companies.items():
-        for name in [c['name'], *(c.get('aliases') or [])]:
-            aliases[normalize(name)].add(f'company:{cid}')
-
-    def institution_for_label(label):
-        if normalize(label) in ('', 'n/a', 'na', 'n.a.', 'none', 'null', '-', 'sin institucion', 'sin empresa', 'no aplica'):
-            return ''
-        candidates = aliases[normalize(label)]
-        if len(candidates) == 1:
-            return next(iter(candidates))
-        # Ambiguous aliases remain distinct; no fuzzy matching of institutions.
-        key = 'name:' + normalize(label)
-        institutions.setdefault(key, str(label).strip())
-        return key
+    institution_index = InstitutionIndex(companies, local_institutions)
+    institutions = institution_index.names
+    institution_for_label = institution_index.label
 
     tickets = {}
     for tid, original in snapshots.items():
@@ -198,12 +194,12 @@ def load_local_dataset(root=ROOT):
         ids = {identifier(contact['company_id'])} if contact.get('company_id') else set()
         for c in contact.get('other_companies') or []:
             ids.add(identifier(c.get('company_id') if isinstance(c, dict) else c))
-        keys = {f'company:{cid}' for cid in ids if cid}
+        keys = {institution_index.company(cid) for cid in ids if cid}
         source = 'contact_company_id' if keys else 'unassigned'
         issues = []
         link = links_by_id.get(uid)
         if link:
-            linked_key = f"company:{link['company_id']}"
+            linked_key = institution_index.company(link['company_id'])
             if keys and linked_key not in keys:
                 issues.append('conflicto_con_cruce_verificado')
             else:
@@ -253,7 +249,27 @@ def load_local_dataset(root=ROOT):
         t['contact_institutions'] = contact.get('institution_names', [])
         t['institution_name'] = institutions.get(t['institution_key'], '')
         t['mapping_source'] = contact.get('mapping_source', 'unassigned')
+    event_times = [timestamp(a.get('performed_at')) for a in activities if timestamp(a.get('performed_at')).year > 1]
+    missing_days = []
+    if activity_file_dates:
+        day = min(activity_file_dates)
+        while day <= max(activity_file_dates):
+            if day not in activity_file_dates:
+                missing_days.append(day.isoformat())
+            day += timedelta(days=1)
+    history_coverage = {
+        'first_activity_utc': min(event_times).isoformat() if event_times else None,
+        'last_activity_utc': max(event_times).isoformat() if event_times else None,
+        'first_file_date': min(activity_file_dates).isoformat() if activity_file_dates else None,
+        'last_file_date': max(activity_file_dates).isoformat() if activity_file_dates else None,
+        'missing_file_dates': missing_days,
+        'activity_files': sum(name.startswith('activities_') for name in sources),
+    }
     return {'tickets': tickets, 'contacts': contacts, 'institutions': institutions,
+            'institution_index': institution_index, 'companies': companies,
+            'verified_contact_groups': verified_groups,
+            'contact_groups': contact_groups(contacts, verified_groups), 'history_coverage': history_coverage,
+            'people': {uid: u.get('name') or uid for uid, u in users.items()},
             'duplicates': duplicates, 'errors': errors, 'sources': sources,
             'signature': source_signature(root)}
 
@@ -266,7 +282,7 @@ def contact_mapping(dataset, contact_ids=None):
             continue
         for key in contact['institution_keys'] or ['']:
             source = contact['mapping_source']
-            status = ('provisional' if source == 'provisional_from_ticket_institution' else
+            status = ('provisional' if source in ('provisional_from_ticket_institution', 'provisional_local_association') else
                       'unassigned' if not key else 'verified' if source == 'verified_local_mapping' else 'recorded')
             rows.append({
                 'contact_id': uid, 'contact_name': contact.get('name'), 'email': contact.get('email'),

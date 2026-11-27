@@ -7,6 +7,7 @@
       "aliases": [
         "AYA",
         "AyA",
+        "YA - Instituto de Agua y Alcantarillado",
         "Aya - Instituto Costarricense De Acueductos Y Alcantarillados"
       ]
     },
@@ -21,7 +22,8 @@
       "aliases": [
         "CIDH",
         "Corte Interamericana de Derechos Humanos",
-        "Corte Interamericana"
+        "Corte Interamericana",
+        "Corte"
       ]
     },
     {
@@ -43,21 +45,23 @@
     {
       "id": 203000615206,
       "name": "UACM",
-      "aliases": []
+      "aliases": ["AUCM"]
     },
     {
       "id": 203000615205,
       "name": "UCIMED",
       "aliases": [
-        "Biblioteca UCIMED"
+        "Biblioteca UCIMED",
+        "Biblioteca Enrique Uribe Pagés"
       ]
     },
     {
       "id": 203000592450,
-      "name": "UGV Universidad Gerardo Barrios",
+      "name": "Universidad Gerardo Barrios (UGB)",
       "aliases": [
         "Universidad Gerardo Barrios",
-        "UGB"
+        "UGB",
+        "UGV Universidad Gerardo Barrios"
       ]
     },
     {
@@ -115,7 +119,9 @@
       "id": 203000394496,
       "name": "Universidad Austral",
       "aliases": [
-        "Austral"
+        "Austral",
+        "Autral Argentina",
+        "Universidad Austral Sede Rosario"
       ]
     },
     {
@@ -136,8 +142,11 @@
     {
       "id": 203000615211,
       "name": "Universidad Hispanoamericana UH",
+      "id_aliases": [203000615210],
       "aliases": [
-        "Universidad Hispanoamericana"
+        "Universidad Hispanoamericana",
+        "UH",
+        "UH-Universidad Hispanoamericana"
       ]
     },
     {
@@ -176,6 +185,15 @@
       "aliases": []
     }
   ],
+  "local_institutions": [
+    {"name": "Universidad Tecnológica Centroamericana UNITEC - Honduras", "aliases": ["Unitec", "Universidad Tecnológica Centroamericana UNITEC", "UNITEC Honduras"]},
+    {"name": "CEJA", "aliases": ["Ceja America", "Ceja Americas"]},
+    {"name": "Universidad de Ciencias y Artes de Chiapas", "aliases": ["Unicach"]},
+    {"name": "Caja de Seguro Social - Panamá", "aliases": ["Caja del Seguro Social", "CSS"]},
+    {"name": "Universidad Don Bosco", "aliases": ["UDB"]},
+    {"name": "Universidad de Guadalajara", "aliases": ["UDG Mexico"]}
+  ],
+  "verified_contact_groups": [],
   "verified_contact_links": [
     {
       "contact_id": 203009343356,

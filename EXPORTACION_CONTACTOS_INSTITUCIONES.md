@@ -1,110 +1,57 @@
 # Exportación por contacto e institución
 
-Implementación para [la entrega de Freshdesk en Notion](https://app.notion.com/p/41d40e1f2a2c8180b8abd9c98f6db8de).
-La herramienta está integrada en la pestaña **Exportación por institución/contacto**
-del dashboard. Usa los archivos locales para seleccionar contactos y tickets, y
-permite completar sus descripciones y respuestas desde Freshdesk mediante API key.
-Laura realiza el análisis de los datos disponibles.
-
 ## Desde el dashboard
 
-1. Abrir **Exportación por institución/contacto**.
-2. Los contactos e instituciones se cargan automáticamente desde los archivos del proyecto.
-   En **Contenido de la descarga**, elegir **Texto completo desde Freshdesk** e
-   introducir el dominio y la API key en el campo protegido. No enviar la clave
-   por chat. Para trabajar sin conexión, elegir **Solo datos locales**.
-3. Elegir **Institución** o **Contacto** y seleccionar el registro por nombre e ID.
-   **Contactos y pendientes de este grupo** muestra sus asociaciones, cruces
-   provisionales, candidatos ambiguos y posibles duplicados. El selector incluye
-   **Sin institución / pendientes de asignar** para consultar los contactos no resueltos.
-   El botón **Descargar cruce de este grupo** prepara el cruce por identificadores.
-4. Elegir fechas, producto y estados, o dejarlos vacíos para incluir el histórico.
-   Las notas internas requieren marcar su opción explícita.
-5. Pulsar **Consultar y preparar descarga**, revisar conteos y cobertura por contacto,
-   y descargar CSV, JSON o ZIP. El ZIP incluye conversaciones, notas cuando se pidieron,
-   histórico disponible y reportes de cobertura. En modo texto completo se obtiene
-   la descripción de cada ticket y se recorren todas las páginas de conversaciones.
-   Si falla la API, la información local de respaldo se señala como incompleta.
+1. Abrir **Exportación por institución/contacto**. Elegir **Texto completo desde Freshdesk** e introducir dominio y API key en el campo protegido.
+2. Pulsar **Actualizar lista de contactos e instituciones** para incorporar el catálogo actual. También se reconcilia al preparar la descarga.
+3. Elegir **Institución** o **Contacto**, el nombre agrupado y las fechas **Desde / Hasta (UTC)**.
+4. Marcar **Incluir notas internas accesibles** si se necesitan.
+5. Pulsar **Consultar y preparar descarga**, revisar cobertura e incidencias y **Descargar Excel**. JSON y ZIP son complementarios; el ZIP incluye Excel y los archivos CSV/JSON.
 
-Los filtros laterales de actividades no afectan esta pestaña; también se puede usar
-si esos filtros no dejan tickets visibles. Los resultados pertenecen a la última
-consulta ejecutada: después de cambiar filtros se debe pulsar de nuevo **Consultar**.
-Se mantienen solamente en la sesión y se preparan en memoria. Si cambian los archivos
-de origen, se invalida la descarga anterior. **Borrar resultados de esta sesión**
-permite quitarlos explícitamente.
+Se incluyen tickets creados **o con movimientos en el rango**, sin excluir abiertos, pendientes, resueltos ni cerrados. Los movimientos se detectan por actividades locales, fechas de actualización, conversaciones y estadísticas disponibles. Para cada ticket seleccionado se conserva todo su histórico disponible; las respuestas y actividades indican si ocurrieron dentro del rango. Los filtros laterales no afectan esta consulta. Tras cambiar la selección, hay que preparar nuevamente la descarga; se identifica la última consulta preparada.
 
-### Descripciones y respuestas completas desde Freshdesk
+## Agrupación y contactos pendientes
 
-La API key se utiliza en la sesión, sin escribirla en archivos, caché compartida
-ni descargas. Cambiar la clave, dominio o modo invalida los resultados anteriores.
-El acceso está limitado a los permisos de la cuenta de la clave.
+Las instituciones se normalizan por mayúsculas, acentos, puntuación y espacios, y por alias explícitos en `institution_directory.json`. `id_aliases` permite reconocer IDs equivalentes de empresa. Las abreviaturas o equivalencias adicionales requieren una regla explícita, no una coincidencia aproximada automática.
 
-Se usa el número visible del ticket (`display_id`) para consultar el detalle
-`/api/v2/tickets/{id}?include=stats` y todas las páginas de
-`/api/v2/tickets/{id}/conversations`. No se utiliza el resumen limitado de
-conversaciones embebidas. Se conservan cuerpo de texto, HTML y metadatos sin recortar.
-Las notas privadas solo se descargan si se marca su opción, en archivos separados
-dentro del ZIP.
+Los contactos se agrupan por correo exacto normalizado, identificador externo o `verified_contact_groups`. Cada ticket mantiene el ID real del solicitante. Dos personas con el mismo nombre y distintos identificadores permanecen separadas. Los buzones compartidos deben revisarse como posibles casos ambiguos.
 
-Si falla un ticket, se mantiene la información local disponible y se incluye el
-fallo en `remote_content_errors` del manifiesto. La interfaz y los nombres de los
-archivos indican **parcial**. Un cambio de solicitante respecto al respaldo se
-señala para revisar la asociación antes de importar su contenido.
+**Contactos y pendientes de este grupo** muestra las asociaciones de los contactos de la consulta:
 
-La selección de contactos, tickets y filtros sigue siendo local: esta opción
-completa el contenido de los tickets seleccionados, pero no descubre tickets nuevos
-que todavía no existen en el respaldo. El histórico de cambios sigue limitado a
-los archivos de actividades locales. Los adjuntos se incluyen como metadatos y enlaces,
-no como binarios. Los campos de SLA de la API se conservan separadamente de los del respaldo.
+- **Registrada:** institución del contacto en el catálogo disponible.
+- **Verificada:** cruce explícito mantenido en el directorio local.
+- **Provisional:** evidencia única de institución en tickets, o asociación del respaldo que no está completa en el catálogo actual.
+- **Sin asignar:** no se ha resuelto la asociación. Se conservan los candidatos e incidencias.
+- **Posibles duplicados:** registros que requieren revisión; compartir nombre no provoca una fusión.
 
-### Fuentes y asociación local
+Cuando un ticket identifica explícitamente la institución pero su contacto no está asociado, se incluye **ese ticket** con su motivo de selección. No se incorporan automáticamente los demás tickets del mismo contacto. El reporte de pendientes indica `included_in_export` para distinguir los incluidos. La funcionalidad no modifica asociaciones en Freshdesk.
 
-- `3748365/Tickets*.json`: asunto, descripción, solicitante, agente, fechas, estado,
-  producto, campos de institución y SLA disponibles. Se distingue `display_id`
-  (número de ticket) de `id` (identificador interno).
-- `actores/Users*.json` y `actores/AllAgents*.json`: nombres e IDs de personas.
-- `activities_*.json`: cambios posteriores al respaldo e histórico disponible.
-- `institution_directory.json`: nombres de instituciones, alias explícitos e IDs
-  de asociaciones verificadas. No contiene credenciales ni textos de conversaciones.
-- `actores/Companies*.json`, cuando existan: catálogo local adicional de instituciones.
+## Contenido del Excel
 
-Se une el solicitante por ID, nunca por coincidencia de nombre. Se prefieren
-`company_id` y los cruces verificados del catálogo. Cuando un contacto sin asociación
-aparece con una sola institución en sus tickets, se crea un cruce provisional
-identificado como `provisional_from_ticket_institution`. Si aparecen varias, queda
-como ambiguo. No se asigna por similitud de nombres o dominios de correo.
+- **Resumen:** consulta, fechas, cobertura y límites.
+- **Tickets:** IDs, asunto, descripción completa y HTML, contacto, institución, estado, fechas, agente, producto y SLA disponible.
+- **Respuestas** y, si se solicitaron, **Notas_internas:** texto completo, HTML, autor, fechas y adjuntos como enlaces/metadatos.
+- **Actividades / Cambios_estado:** eventos locales completos, actores, fecha y archivo de origen. El estado anterior se muestra solo cuando existe una observación previa. Una creación deducida de `created_at` está identificada como tal.
+- **Contactos / Cobertura / Normalizacion / Incidencias:** IDs, asociaciones, conteos, alias, posibles duplicados, errores y días sin archivo.
+- **Textos_largos:** contenido que supera el límite de una celda, dividido sin recortes en partes numeradas. Para reconstruirlo, concatenar `Texto` por `Referencia` y `Parte`, sin añadir separadores. Caracteres incompatibles con XML se codifican como cadena JSON y se indica su codificación.
 
-La consulta de institución reúne los tickets de sus contactos vinculados. Los
-tickets que mencionan esa institución pero tienen un contacto sin asociación resuelta
-se listan aparte y se incluyen en `institution_unresolved_tickets.csv`, sin mezclarlos
-con los confirmados. Ese reporte es previo a filtros y sirve para revisar cobertura.
-Los contactos sin tickets también aparecen en el reporte de cobertura.
+Los textos se escriben como texto, no como fórmulas de Excel. La clave no se guarda en archivos, descargas ni caché compartida. Las respuestas remotas y descargas se mantienen en la sesión; cambiar dominio, clave o modo invalida los resultados anteriores.
 
-Valores vacíos, `N/A`, `null`, `Sin institución` y equivalentes no cuentan como
-instituciones ni generan falsos conflictos. Los posibles duplicados por nombre,
-correo o ID externo se señalan dentro de sus grupos, sin fusionarlos ni trasladar
-sus tickets a otro contacto. Un duplicado puede apuntar a un ID de otro grupo;
-eso se muestra para revisión, sin incorporarlo automáticamente.
+## Fuentes y cobertura
 
-El ZIP contiene `contact_institution_mapping.csv` y `contacts_unassigned.csv`.
-El cruce distingue `recorded` (asociación registrada en el respaldo), `verified`
-(cruce verificado local), `provisional` (evidencia única en tickets) y `unassigned`.
-Incluye IDs de contacto, institución, tickets de evidencia, candidatos e incidencias.
-Cuando no hay ID de institución de Freshdesk se conserva una clave local estable
-`name:...`, dejando `company_id` vacío; nunca se inventa un ID de Freshdesk.
-La revisión refleja los archivos locales disponibles, no el estado actual de Freshdesk,
-y no modifica la plataforma. Los cruces verificados se mantienen en el catálogo local.
+Se reutilizan `3748365/Tickets*.json`, `actores/Users*.json`, `actores/AllAgents*.json`, `actores/Companies*.json` cuando existan, `institution_directory.json` y `activities_*.json`. Los eventos repetidos se deduplican y mantienen su archivo de origen.
 
-Los nombres y correos de contactos, institución del contacto e institución del ticket
-acompañan a los IDs en CSV/JSON. Las notas internas disponibles se guardan por separado
-y solo si se marca su opción. La consulta no hereda el corte de abril del dashboard:
-usa todo el histórico que contienen los archivos locales.
+La primera actividad de los datos revisados es **2026-04-15**. La interfaz y el Excel calculan la fecha inicial/final real y los días sin archivo. Puede haber tickets creados antes, pero no se reconstruyen cambios anteriores al inicio de recolección ni eventos de archivos ausentes. Un día sin archivo tampoco demuestra por sí solo que hubo movimientos perdidos.
 
-**Límite del modo Solo datos locales:** las actividades incluyen referencias a notas
-(`id` y `type`), pero no el cuerpo de las respuestas. Las descripciones sí se
-conservan completas cuando existen. La herramienta muestra cuántas referencias no
-tienen texto; no certifica conversaciones completas ni datos posteriores al respaldo.
-Actualizar los archivos del proyecto es lo que actualiza esta pestaña.
+Con API se actualizan empresas/contactos y se consultan los tickets por IDs de solicitante y empresa desde el inicio permitido, recorriendo las páginas. Se reutilizan los datos locales y se agregan tickets nuevos descubiertos; después se recuperan todas las páginas de conversaciones accesibles y se aplica el rango. Véase la [documentación oficial de Freshdesk](https://developer.freshdesk.com/api/).
+
+**Solo datos locales** funciona sin clave, pero no garantiza el texto completo: muchas actividades contienen únicamente IDs de notas. Fallos de API o de archivos se señalan como resultado parcial, conservando el respaldo disponible. Un ticket inaccesible cuya fecha no pueda comprobarse se conserva marcado como fecha no verificable para revisión.
+
+Una consulta sin errores no certifica todos los tickets de contactos desconocidos o sin asociación ni tickets ocultos por permisos, eliminados, spam, fusionados o archivados no accesibles. La API no reconstruye el histórico de cambios ausente; los adjuntos se conservan como enlaces, no como archivos binarios.
+
+## Validación técnica
+
+Ejecutar `.\.venv\Scripts\python.exe -m unittest discover -s tests -q`. Las pruebas cubren agrupación por identificadores, separación de homónimos, selección por movimientos, incorporación de tickets por API, aislamiento de tickets de otra institución, privacidad, textos extensos y funcionamiento de la interfaz.
 
 ## Utilidad opcional por API, independiente del dashboard
 

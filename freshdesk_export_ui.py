@@ -1,19 +1,14 @@
-"""Dashboard queries using the same local snapshots as the analytics tabs."""
+﻿"""Institution/contact exports combining local history and Freshdesk content."""
 from datetime import date
 import hashlib
-import pandas as pd
+import io
+import zipfile
 import streamlit as st
-from local_freshdesk_export import ROOT, build_downloads, load_local_dataset, query_local, source_signature
-from local_freshdesk_export import UNASSIGNED_GROUP, MAPPING_FIELDS, institution_group, csv_bytes
-from freshdesk_full_content import fetch_full_content
+from local_freshdesk_export import ROOT, load_local_dataset, source_signature, build_downloads, UNASSIGNED_GROUP
+from export_identity import contact_groups
+from freshdesk_history_export import export_history, refresh_catalog
+from freshdesk_excel import build_excel
 from scripts.export_freshdesk import Client, DEFAULT_DOMAIN
-
-ASSOCIATION_LABELS = {
-    'contact_company_id': 'Institución del contacto',
-    'verified_local_mapping': 'Asociación verificada',
-    'provisional_from_ticket_institution': 'Provisional: institución en tickets',
-    'unassigned': 'Sin asignar',
-}
 
 
 @st.cache_data(show_spinner=False)
@@ -23,153 +18,103 @@ def cached_dataset(root, signature):
 
 def render_export_tab():
     st.subheader('Exportación por contacto e institución')
-    st.caption('Selecciona los tickets del dashboard y descarga su descripción y respuestas completas desde Freshdesk. '
-               'Los filtros laterales no limitan esta consulta.')
-    for key in ['export_api_key', 'export_identity', 'export_catalog', 'export_domain']:
-        st.session_state.pop(key, None)
-    signature = 'grouped-associations-v2:' + source_signature(ROOT)
-    if st.session_state.get('export_local_signature') != signature:
-        st.session_state.pop('export_result', None)
-        st.session_state['export_local_signature'] = signature
-    dataset = cached_dataset(str(ROOT), signature)
-    content_mode = st.radio('Contenido de la descarga', ['Texto completo desde Freshdesk', 'Solo datos locales'],
-                            key='full_content_mode', horizontal=True)
+    st.caption('Selecciona un nombre y un rango: tickets creados o con movimientos en esas fechas, en todos los estados. Los filtros laterales no limitan esta consulta.')
+    signature = 'history-excel-v1:' + source_signature(ROOT)
+    content_mode = st.radio('Contenido de la descarga', ['Texto completo desde Freshdesk', 'Solo datos locales'], key='full_content_mode', horizontal=True)
     use_api = content_mode == 'Texto completo desde Freshdesk'
     domain, api_key = DEFAULT_DOMAIN, ''
     if use_api:
         domain = st.text_input('Dominio de Freshdesk', value=DEFAULT_DOMAIN, key='full_content_domain')
         api_key = st.text_input('API key de Freshdesk', type='password', key='full_content_api_key')
-        st.caption('Se usa solo en esta sesión y no se incluye en las descargas. '
-                   'Se recupera el contenido de los tickets seleccionados; no se buscan tickets nuevos fuera del respaldo local.')
-    identity = hashlib.sha256((content_mode + domain + '\0' + api_key).encode()).hexdigest()
+        st.caption('La API permite actualizar las listas, encontrar tickets adicionales y recuperar descripciones y respuestas completas. La clave no se incluye en las descargas.')
+    identity = hashlib.sha256((signature + content_mode + domain + '\0' + api_key).encode()).hexdigest()
     if st.session_state.get('full_content_identity') != identity:
         st.session_state.pop('export_result', None)
+        st.session_state.pop('export_catalog', None)
         st.session_state['full_content_identity'] = identity
+    dataset = st.session_state.get('export_catalog') or cached_dataset(str(ROOT), signature)
+    if use_api and st.button('Actualizar lista de contactos e instituciones', disabled=not api_key.strip()):
+        try:
+            with st.spinner('Actualizando catálogos…'):
+                dataset, errors = refresh_catalog(dataset, Client(domain.strip(), api_key.strip()))
+            st.session_state['export_catalog'] = dataset
+            if errors:
+                st.warning('Catálogo parcial; se conservan las referencias locales.')
+                st.dataframe(errors)
+            else:
+                st.success('Listas actualizadas y agrupadas.')
+        except ValueError as exc:
+            st.error(str(exc))
+    coverage = dataset.get('history_coverage', {})
+    st.caption(f"Histórico local: {coverage.get('first_activity_utc') or 'sin fecha disponible'} → {coverage.get('last_activity_utc') or 'sin fecha disponible'}. Días sin archivo: {len(coverage.get('missing_file_dates', []))}.")
     if dataset['errors']:
-        st.warning('Algunos archivos no se pudieron leer. La cobertura puede estar incompleta.')
-        st.write(dataset['errors'])
-    if not dataset['tickets']:
-        st.info('No hay tickets disponibles en los archivos locales.')
-        return
-    contacts = dataset['contacts']
+        st.warning('Hay archivos locales ilegibles. Revisa la cobertura de la descarga.')
     mode = st.radio('Consultar por', ['Institución', 'Contacto'], horizontal=True, key='export_mode')
     if mode == 'Institución':
         labels = {**dataset['institutions'], UNASSIGNED_GROUP: 'Sin institución / pendientes de asignar'}
     else:
-        labels = {uid: f"{c.get('name') or 'Sin nombre'} · {' / '.join(c['institution_names']) or 'Sin institución'} · ID {uid}"
-                  for uid, c in contacts.items()}
+        groups = dataset.get('contact_groups') or contact_groups(dataset['contacts'])
+        labels = {key: f"{g['name']} · {', '.join(g['emails']) or 'sin correo'} · IDs {', '.join(g['contact_ids'])}" for key, g in groups.items()}
     if not labels:
-        st.info('No hay registros identificados para esta consulta.')
+        st.info('Actualiza el catálogo con la API para disponer de nombres.')
         return
-    selected_id = st.selectbox(mode, sorted(labels, key=lambda key: (key == UNASSIGNED_GROUP, labels[key].casefold())),
-                               format_func=labels.get, key='export_selected_' + mode)
-    group = institution_group(dataset, 'institution' if mode == 'Institución' else 'contact', selected_id)
-    with st.expander('Contactos y pendientes de este grupo', expanded=True):
-        assigned, provisional, pending = st.columns(3)
-        assigned.metric('Contactos del grupo', len(group['assigned_ids']))
-        provisional.metric('Cruces provisionales', len({r['contact_id'] for r in group['mapping'] if r['status'] == 'provisional'}))
-        pending.metric('Pendientes de asociación', len({r['contact_id'] for r in group['mapping'] if r['status'] == 'unassigned'}))
-        records = [{'ID contacto': r['contact_id'], 'Contacto': r['contact_name'],
-                    'Institución': r['institution_name'] or 'Sin asignar',
-                    'Asociación': ASSOCIATION_LABELS[r['source']],
-                    'Revisión': ', '.join(r['issues']),
-                    'Posibles duplicados (IDs)': ', '.join(r['duplicate_contact_ids'])}
-                   for r in group['mapping']]
-        st.dataframe(pd.DataFrame(records), hide_index=True, use_container_width=True)
-        if group['pending_ids']:
-            st.info('Los contactos pendientes aparecen por evidencia en sus tickets, pero no se incorporan '
-                    'automáticamente a esta institución. El cruce conserva sus candidatos e incidencias.')
-        if group['duplicates']:
-            st.warning('Hay posibles duplicados relacionados con este grupo. Se conservan sus IDs y tickets por separado.')
-            st.dataframe(pd.DataFrame(group['duplicates']).rename(columns={
-                'field': 'Coincidencia en', 'value': 'Valor', 'contact_ids': 'IDs relacionados'}),
-                hide_index=True, use_container_width=True)
-        st.download_button('Descargar cruce de este grupo', csv_bytes(group['mapping'], MAPPING_FIELDS),
-                           'cruce_contactos_institucion.csv', 'text/csv', key='export_group_mapping')
-    st.caption('Por institución se incluyen todos los tickets de sus contactos vinculados. '
-               'Los tickets con institución registrada pero contacto sin asociación resuelta se señalan por separado.')
-    available_dates = sorted(t['created_at'][:10] for t in dataset['tickets'].values() if t.get('created_at'))
-    products = sorted({t['product'] for t in dataset['tickets'].values() if t.get('product')})
-    status_labels = {2: 'Abierto', 3: 'Pendiente', 4: 'Resuelto', 5: 'Cerrado'}
-    states = sorted({t['status'] for t in dataset['tickets'].values() if t.get('status') is not None}, key=str)
-    with st.form('export_query_form'):
-        date_filter = st.checkbox('Filtrar por fechas', value=False)
-        left, right = st.columns(2)
-        start = left.date_input('Desde (UTC)', value=date.fromisoformat(available_dates[0]) if available_dates else date.today())
-        end = right.date_input('Hasta (UTC)', value=date.fromisoformat(available_dates[-1]) if available_dates else date.today())
-        date_field = st.selectbox('Fecha del ticket', ['created_at', 'updated_at'],
-                                  format_func=lambda value: 'Creación' if value == 'created_at' else 'Última actualización')
-        selected_products = st.multiselect('Producto', products, placeholder='Todos')
-        statuses = st.multiselect('Estado', states, format_func=lambda value: status_labels.get(value, str(value)))
-        include_private = st.checkbox('Incluir notas internas disponibles en archivos separados', value=False)
+    selected = st.selectbox(mode, sorted(labels, key=lambda k: (k == UNASSIGNED_GROUP, labels[k].casefold())), format_func=labels.get, key='export_selected_' + mode)
+    st.caption('Se agrupan variantes de institución mediante nombres normalizados y alias. Los contactos se agrupan por correo, identificador externo o equivalencia verificada; compartir nombre no basta.')
+    first = coverage.get('first_activity_utc')
+    default_start = date.fromisoformat(first[:10]) if first else date(2026, 4, 15)
+    with st.form('history_export_form'):
+        start = st.date_input('Desde (UTC)', value=default_start, key='export_start')
+        end = st.date_input('Hasta (UTC)', value=date.today(), key='export_end')
+        private = st.checkbox('Incluir notas internas accesibles', value=False)
         submitted = st.form_submit_button('Consultar y preparar descarga', disabled=use_api and not api_key.strip())
     if submitted:
         st.session_state.pop('export_result', None)
-        try:
-            result = query_local(dataset, 'institution' if mode == 'Institución' else 'contact', selected_id,
-                                 start.isoformat() if date_filter else None, end.isoformat() if date_filter else None,
-                                 date_field, selected_products, statuses, include_private)
-            if use_api:
-                client = Client(domain.strip(), api_key.strip())
-                indicator = st.progress(0, text='Recuperando descripciones y respuestas completas…')
+        if start > end:
+            st.error('La fecha inicial debe ser anterior o igual a la final.')
+        else:
+            try:
+                indicator = st.progress(0, text='Reconciliando contactos y tickets…')
                 try:
-                    result = fetch_full_content(result, client, include_private,
-                        progress=lambda done, total: indicator.progress(done / total,
-                            text=f'Recuperando contenido: {done}/{total} tickets'))
+                    result = export_history(dataset, 'institution' if mode == 'Institución' else 'contact', selected,
+                        start.isoformat(), end.isoformat(), Client(domain.strip(), api_key.strip()) if use_api else None,
+                        private, lambda done, total: indicator.progress(done / max(total, 1), text=f'Recuperando contenido: {done}/{total}'))
+                    result.update(label=labels[selected], mode=mode)
+                    excel = build_excel(result)
+                    files, archive = build_downloads(result)
+                    buffer = io.BytesIO(archive)
+                    with zipfile.ZipFile(buffer, 'a', zipfile.ZIP_DEFLATED) as package:
+                        package.writestr('freshdesk.xlsx', excel)
+                    st.session_state['export_result'] = {**result, 'excel': excel, 'files': files, 'zip': buffer.getvalue()}
                 finally:
                     indicator.empty()
-            files, archive = build_downloads(result)
-            st.session_state['export_result'] = {**result, 'files': files, 'zip': archive,
-                                                  'label': labels[selected_id], 'mode': mode}
-        except ValueError as exc:
-            st.error(str(exc))
+            except ValueError as exc:
+                st.error(str(exc))
     result = st.session_state.get('export_result')
     if not result:
         return
     manifest = result['manifest']
-    st.markdown(f"**Última consulta preparada:** {result['mode']} · {result['label']}")
-    st.caption('Si cambias la selección o los filtros, vuelve a pulsar Consultar para actualizar las descargas.')
-    st.json(manifest['filters'], expanded=False)
+    st.markdown(f"**Consulta preparada:** {result['mode']} · {result['label']}")
+    st.caption(f"Rango UTC: {manifest['filters']['start']} → {manifest['filters']['end']}. Si cambias la selección, vuelve a preparar la descarga.")
     a, b, c = st.columns(3)
     a.metric('Contactos incluidos', manifest['contacts'])
     b.metric('Tickets', manifest['tickets_exported'])
-    c.metric('Respuestas sin texto disponible', manifest['conversation_text_missing'])
-    if 'remote_content_complete' in manifest:
-        if manifest['remote_content_errors']:
-            st.error('Descarga parcial: no se pudo recuperar todo el contenido de algunos tickets.')
-            st.dataframe(pd.DataFrame(manifest['remote_content_errors']), hide_index=True, use_container_width=True)
-        elif manifest['tickets_exported']:
-            st.success('Descripciones y todas las páginas de respuestas accesibles recuperadas desde Freshdesk.')
-        else:
-            st.info('No hay tickets con los filtros seleccionados.')
-    elif manifest['conversation_text_missing']:
-        st.warning('Los archivos de actividades contienen referencias a respuestas, pero no su texto completo. '
-                   'La descarga identifica estas referencias; no equivale a una exportación completa de conversaciones.')
-    st.caption('CSV conserva texto multilínea. JSON conserva el contenido completo y HTML; '
-               'las notas internas solicitadas se incluyen por separado en el ZIP.')
-    if result['unresolved']:
-        st.warning('Hay tickets que mencionan esta institución, pero la asociación del contacto es ambigua '
-                   'o está sin resolver. No se mezclan con los tickets asociados; se incluyen en un reporte separado.')
-        st.dataframe(pd.DataFrame(result['unresolved']), hide_index=True, use_container_width=True)
-    preview = [{'Ticket': t['id'], 'Contacto': t['contact_name'],
-                'Institución del contacto': ', '.join(t['contact_institutions']),
-                'Institución del ticket': t['institution_name'], 'Asunto': t.get('subject'),
-                'Producto': t.get('product'), 'Estado': status_labels.get(t.get('status'), t.get('status_name')),
-                'Creado': t.get('created_at'), 'Asociación': ASSOCIATION_LABELS[t['mapping_source']]} for t in result['tickets']]
-    st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
-    with st.expander('Cobertura por contacto', expanded=True):
-        coverage = pd.DataFrame(result['coverage'])
-        if not coverage.empty:
-            coverage['mapping_source'] = coverage['mapping_source'].map(ASSOCIATION_LABELS)
-        st.dataframe(coverage.rename(columns={'contact_id': 'ID contacto', 'contact_name': 'Contacto',
-                     'institution_names': 'Instituciones', 'mapping_source': 'Asociación',
-                     'tickets_before_filters': 'Tickets antes de filtros', 'tickets_exported': 'Tickets incluidos',
-                     'ticket_ids': 'IDs de tickets'}), hide_index=True, use_container_width=True)
-    suffix = ('completo' if manifest['remote_content_complete'] else 'parcial') if 'remote_content_complete' in manifest else 'local'
-    st.download_button('Descargar tickets CSV', result['files']['tickets.csv'], f'tickets_{suffix}.csv', 'text/csv')
-    st.download_button('Descargar tickets JSON', result['files']['tickets.json'], f'tickets_{suffix}.json', 'application/json')
-    st.download_button('Descargar paquete completo ZIP', result['zip'], f'freshdesk_{suffix}.zip', 'application/zip')
-    with st.expander('Cobertura y límites de los datos locales'):
+    c.metric('Actividades locales', manifest['local_activity_count'])
+    if manifest.get('extraction_complete'):
+        st.success('Descripciones y páginas de respuestas accesibles recuperadas; revisa los límites de cobertura del histórico.')
+    else:
+        st.warning('Resultado parcial o local. Consulta Incidencias y Resumen en el Excel; los datos locales no garantizan textos completos.')
+    if manifest['included_by_ticket_institution']:
+        st.info('Se incluyen tickets con esta institución registrada aunque el contacto esté sin resolver. Esto no asigna a la institución los demás tickets de ese contacto.')
+    st.caption('Excel incluye tickets, respuestas, actividades, cambios de estado, asociaciones y cobertura. Conserva el historial disponible de los tickets seleccionados, incluso fuera del rango, con una marca de fecha. Textos extensos se dividen sin recortes en Textos_largos.')
+    with st.expander('Contactos y pendientes de este grupo'):
+        st.dataframe(result['mapping'], hide_index=True)
+        st.caption('Provisional: asociación deducida o conservada del respaldo. Sin asignar: no hay una asociación resuelta. Los posibles duplicados mantienen sus IDs.')
+    with st.expander('Cobertura por contacto'):
+        st.dataframe(result['coverage'], hide_index=True)
+    st.download_button('Descargar Excel', result['excel'], 'freshdesk.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    st.download_button('Descargar tickets JSON', result['files']['tickets.json'], 'tickets.json', 'application/json')
+    st.download_button('Descargar paquete ZIP (Excel y datos)', result['zip'], 'freshdesk.zip', 'application/zip')
+    with st.expander('Cobertura y límites de los datos'):
         st.json(manifest)
     if st.button('Borrar resultados de esta sesión', key='export_clear'):
         st.session_state.pop('export_result', None)

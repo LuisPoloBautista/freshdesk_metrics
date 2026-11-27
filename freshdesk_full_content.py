@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from scripts.export_freshdesk import ApiError
 
 
-def fetch_full_content(result, api, include_private=False, progress=None):
+def fetch_full_content(result, api, include_private=False, progress=None, details=None):
     output = deepcopy(result)
     errors = []
     for number, ticket in enumerate(output['tickets'], 1):
@@ -13,7 +13,9 @@ def fetch_full_content(result, api, include_private=False, progress=None):
         ticket['content_source'] = 'local_fallback'
         ticket['remote_content_complete'] = False
         try:
-            remote = api.request(f'tickets/{tid}', {'include': 'stats'})
+            remote = (details or {}).get(tid)
+            if remote is None:
+                remote = api.request(f'tickets/{tid}', {'include': 'stats'})
             if str(remote.get('id')) != tid or str(remote.get('requester_id') or '') != ticket['requester_id']:
                 raise ApiError('El ID o solicitante cambió; revisar la asociación antes de exportar')
             if 'description' not in remote and 'description_text' not in remote:
@@ -21,9 +23,15 @@ def fetch_full_content(result, api, include_private=False, progress=None):
             ticket.update(description_text=remote.get('description_text'), description_html=remote.get('description'),
                           subject=remote.get('subject'), content_updated_at=remote.get('updated_at'),
                           content_source='freshdesk', description_available=bool(remote.get('description_text') or remote.get('description')))
+            for field in ('created_at', 'updated_at', 'status', 'stats', 'responder_id'):
+                if field in remote:
+                    ticket[field] = remote[field]
+            if 'status' in remote:
+                ticket['status_name'] = {2: 'Abierto', 3: 'Pendiente', 4: 'Resuelto', 5: 'Cerrado'}.get(remote['status'], str(remote['status']))
             ticket['sla_from_freshdesk'] = {key: remote.get(key) for key in (
                 'due_by', 'fr_due_by', 'nr_due_by', 'is_escalated', 'fr_escalated', 'nr_escalated', 'stats')}
             conversations = api.listing(f'tickets/{tid}/conversations')
+            ticket['_movement_dates'] = [n.get(field) for n in conversations for field in ('created_at', 'updated_at')]
             public, private = [], []
             for conversation in conversations:
                 if conversation.get('private') and not include_private:
