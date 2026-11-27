@@ -2,13 +2,13 @@
 
 ## Desde el dashboard
 
-1. Abrir **Exportación por institución/contacto**. Elegir **Texto completo desde Freshdesk** e introducir dominio y API key en el campo protegido.
-2. Pulsar **Actualizar lista de contactos e instituciones** para incorporar el catálogo actual. También se reconcilia al preparar la descarga.
-3. Elegir **Institución** o **Contacto**, el nombre agrupado y las fechas **Desde / Hasta (UTC)**.
-4. Marcar **Incluir notas internas accesibles** si se necesitan.
-5. Pulsar **Consultar y preparar descarga**, revisar cobertura e incidencias y **Descargar Excel**. JSON y ZIP son complementarios; el ZIP incluye Excel y los archivos CSV/JSON.
+1. Introducir la API key de Freshdesk. El catálogo se actualiza automáticamente.
+2. Elegir **Institución** o **Contacto** y seleccionar el nombre.
+3. Indicar **Desde / Hasta (UTC)** y pulsar **Descargar data**.
 
-Se incluyen tickets creados **o con movimientos en el rango**, sin excluir abiertos, pendientes, resueltos ni cerrados. Los movimientos se detectan por actividades locales, fechas de actualización, conversaciones y estadísticas disponibles. Para cada ticket seleccionado se conserva todo su histórico disponible; las respuestas y actividades indican si ocurrieron dentro del rango. Los filtros laterales no afectan esta consulta. Tras cambiar la selección, hay que preparar nuevamente la descarga; se identifica la última consulta preparada.
+Un único botón genera y descarga el Excel. Incluye tickets creados o con movimientos en el rango, en todos los estados, y respuestas públicas completas. Las notas internas quedan excluidas. No hay filtros de producto, estado ni tipo de fecha, ni paneles de contactos pendientes. La cobertura e incidencias se conservan dentro del Excel. El histórico disponible de cada ticket se conserva también fuera del rango, identificado por fecha.
+
+Se requiere Streamlit 1.60 o superior para generar el archivo al pulsar el botón. Instalar las dependencias actualizadas de requirements.txt.
 
 ## Agrupación y contactos pendientes
 
@@ -16,7 +16,7 @@ Las instituciones se normalizan por mayúsculas, acentos, puntuación y espacios
 
 Los contactos se agrupan por correo exacto normalizado, identificador externo o `verified_contact_groups`. Cada ticket mantiene el ID real del solicitante. Dos personas con el mismo nombre y distintos identificadores permanecen separadas. Los buzones compartidos deben revisarse como posibles casos ambiguos.
 
-**Contactos y pendientes de este grupo** muestra las asociaciones de los contactos de la consulta:
+La hoja **Contactos** del Excel conserva las asociaciones de la consulta:
 
 - **Registrada:** institución del contacto en el catálogo disponible.
 - **Verificada:** cruce explícito mantenido en el directorio local.
@@ -35,7 +35,7 @@ Cuando un ticket identifica explícitamente la institución pero su contacto no 
 - **Contactos / Cobertura / Normalizacion / Incidencias:** IDs, asociaciones, conteos, alias, posibles duplicados, errores y días sin archivo.
 - **Textos_largos:** contenido que supera el límite de una celda, dividido sin recortes en partes numeradas. Para reconstruirlo, concatenar `Texto` por `Referencia` y `Parte`, sin añadir separadores. Caracteres incompatibles con XML se codifican como cadena JSON y se indica su codificación.
 
-Los textos se escriben como texto, no como fórmulas de Excel. La clave no se guarda en archivos, descargas ni caché compartida. Las respuestas remotas y descargas se mantienen en la sesión; cambiar dominio, clave o modo invalida los resultados anteriores.
+Los textos se escriben como texto, no como fórmulas de Excel. La clave no se guarda en archivos, descargas ni caché compartida. El Excel se genera al pulsar el botón con la selección vigente. Cambiar la clave invalida el catálogo de la sesión.
 
 ## Fuentes y cobertura
 
@@ -45,7 +45,7 @@ La primera actividad de los datos revisados es **2026-04-15**. La interfaz y el 
 
 Con API se actualizan empresas/contactos y se consultan los tickets por IDs de solicitante y empresa desde el inicio permitido, recorriendo las páginas. Se reutilizan los datos locales y se agregan tickets nuevos descubiertos; después se recuperan todas las páginas de conversaciones accesibles y se aplica el rango. Véase la [documentación oficial de Freshdesk](https://developer.freshdesk.com/api/).
 
-**Solo datos locales** funciona sin clave, pero no garantiza el texto completo: muchas actividades contienen únicamente IDs de notas. Fallos de API o de archivos se señalan como resultado parcial, conservando el respaldo disponible. Un ticket inaccesible cuya fecha no pueda comprobarse se conserva marcado como fecha no verificable para revisión.
+El motor local puede utilizarse desde código sin clave, pero no garantiza el texto completo: muchas actividades contienen únicamente IDs de notas. Fallos de API o de archivos se señalan como resultado parcial, conservando el respaldo disponible. Un ticket inaccesible cuya fecha no pueda comprobarse se conserva marcado como fecha no verificable para revisión.
 
 Una consulta sin errores no certifica todos los tickets de contactos desconocidos o sin asociación ni tickets ocultos por permisos, eliminados, spam, fusionados o archivados no accesibles. La API no reconstruye el histórico de cambios ausente; los adjuntos se conservan como enlaces, no como archivos binarios.
 

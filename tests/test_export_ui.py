@@ -24,67 +24,58 @@ class ExportUiTests(unittest.TestCase):
     def app(self):
         return AppTest.from_string('from freshdesk_export_ui import render_export_tab\nrender_export_tab()')
 
-    def test_local_query_without_credentials_or_network(self):
-        with patch('freshdesk_export_ui.cached_dataset', return_value=fixture()), \
-                patch('urllib.request.urlopen', side_effect=AssertionError('Network not allowed')):
+    def test_only_dates_and_single_download_after_selection(self):
+        with patch('freshdesk_export_ui.cached_dataset', return_value=fixture()):
             app = self.app().run()
-            app.radio(key='full_content_mode').set_value('Solo datos locales').run()
             self.assertFalse(app.exception)
-            self.assertFalse(app.text_input)
-            self.assertEqual(app.selectbox(key='export_selected_Institución').value, 'company:7')
-            next(b for b in app.button if b.label == 'Consultar y preparar descarga').click().run()
-            self.assertFalse(app.exception)
-            self.assertEqual(app.session_state['export_result']['manifest']['tickets_exported'], 1)
-            self.assertEqual(len(app.get('download_button')), 3)
-            app.radio(key='export_mode').set_value('Contacto').run()
-            self.assertEqual(app.selectbox(key='export_selected_Contacto').value, '10')
-            next(b for b in app.button if b.label == 'Consultar y preparar descarga').click().run()
-            self.assertEqual(app.session_state['export_result']['manifest']['selection']['mode'], 'contact')
+            self.assertEqual(len(app.date_input), 2)
+            self.assertEqual(len(app.selectbox), 1)
+            self.assertEqual(len(app.radio), 1)
+            self.assertFalse(app.checkbox)
+            self.assertFalse(app.multiselect)
+            self.assertFalse(app.expander)
+            self.assertFalse(app.button)
+            self.assertEqual(len(app.get('download_button')), 1)
+            self.assertTrue(app.get('download_button')[0].proto.disabled)
 
-    def test_source_changes_clear_old_downloads(self):
+    def test_credentials_refresh_catalog_and_range_controls_download(self):
         with patch('freshdesk_export_ui.cached_dataset', return_value=fixture()), \
-                patch('freshdesk_export_ui.source_signature', return_value='first') as signature:
+             patch('freshdesk_export_ui.refresh_catalog', return_value=(fixture(), [])) as refresh:
             app = self.app().run()
-            app.radio(key='full_content_mode').set_value('Solo datos locales').run()
-            next(b for b in app.button if b.label == 'Consultar y preparar descarga').click().run()
-            signature.return_value = 'updated'
+            app.text_input[0].set_value('fake-key').run()
+            self.assertFalse(app.exception)
+            self.assertEqual(refresh.call_count, 1)
+            self.assertFalse(app.get('download_button')[0].proto.disabled)
             app.run()
-            self.assertNotIn('export_result', app.session_state)
-            self.assertEqual(len(app.get('download_button')), 0)
+            self.assertEqual(refresh.call_count, 1)
+            from datetime import date
+            app.date_input(key='export_start').set_value(date(2030, 1, 1)).run()
+            self.assertTrue(app.get('download_button')[0].proto.disabled)
+            app.text_input[0].set_value('different-key').run()
+            self.assertEqual(refresh.call_count, 2)
 
-    def test_full_content_requires_key_and_clears_download_on_key_change(self):
+    def test_deferred_download_produces_excel_without_private_notes(self):
+        from datetime import date
+        from io import BytesIO
+        from openpyxl import load_workbook
+        from freshdesk_export_ui import excel_download
         class Api:
             pages = []
-
-            def __init__(self, domain, key):
-                pass
-
+            def __init__(self, domain, key): pass
             def request(self, path, params):
-                return {'id': 1, 'requester_id': 10, 'subject': 'Live', 'description_text': 'Full description'}
-
+                return {'id': 1, 'requester_id': 10, 'description_text': 'Full description'}
             def listing(self, path, **params):
-                if path == 'companies':
-                    return [{'id': 7, 'name': 'UTP'}]
-                if path == 'contacts':
-                    return [{'id': 10, 'name': 'Contact A', 'company_id': 7}]
-                if path == 'tickets':
-                    return []
-                return [{'id': 2, 'private': False, 'body_text': 'Full reply'}]
-
-        with patch('freshdesk_export_ui.cached_dataset', return_value=fixture()), patch('freshdesk_export_ui.Client', Api):
-            app = self.app().run()
-            submit = next(b for b in app.button if b.label == 'Consultar y preparar descarga')
-            self.assertTrue(submit.disabled)
-            app.text_input(key='full_content_api_key').set_value('fake-key').run()
-            next(b for b in app.button if b.label == 'Consultar y preparar descarga').click().run()
-            self.assertFalse(app.exception)
-            result = app.session_state['export_result']
-            self.assertTrue(result['manifest']['remote_content_complete'])
-            self.assertIn(b'Full reply', result['files']['tickets.json'])
-            self.assertNotIn(b'fake-key', result['zip'])
-            app.text_input(key='full_content_api_key').set_value('other-key').run()
-            self.assertNotIn('export_result', app.session_state)
-
-
-if __name__ == '__main__':
-    unittest.main()
+                if path == 'companies': return [{'id': 7, 'name': 'UTP'}]
+                if path == 'contacts': return [{'id': 10, 'name': 'Contact A', 'company_id': 7}]
+                if path == 'tickets': return []
+                return [{'id': 2, 'private': False, 'body_text': 'Full reply'},
+                        {'id': 3, 'private': True, 'body_text': 'Internal secret'}]
+        with patch('freshdesk_export_ui.Client', Api):
+            content = excel_download(fixture(), 'institution', 'company:7', date(2026, 8, 1), date(2026, 8, 1), 'fake-key')
+        workbook = load_workbook(BytesIO(content))
+        self.assertEqual(workbook['Tickets'].max_row, 2)
+        values = str([list(sheet.values) for sheet in workbook])
+        self.assertIn('Full reply', values)
+        self.assertNotIn('Internal secret', values)
+        self.assertNotIn('fake-key', values)
+        self.assertNotIn('Notas_internas', workbook.sheetnames)
